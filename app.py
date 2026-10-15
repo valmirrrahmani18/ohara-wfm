@@ -1,14 +1,18 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
 import math
 
-st.set_page_config(page_title="Ohara WFM Assistant - Swisscom", layout="wide")
+st.set_page_config(page_title="Ohara WFM - Swisscom Engine", layout="wide")
 
-st.title("🧙‍♂️ Ohara - Swisscom WFM Strategic Assistant")
-st.markdown("Advanced 70-Agent Workforce Management, Multi-Week Rotation & Contract Compliance Engine")
+st.title("🧙‍♂️ Ohara - Swisscom Strategic WFM Engine")
+st.markdown("Automated Call Distribution, Priority Constraints & Dynamic Multi-Week Rotation")
 
-# Sidebar Parameters
-st.sidebar.header("⚙️ Account & Operating Parameters")
+# ---------------------------------------------------------
+# SIDEBAR PARAMETERS & LIVE CONTROLS
+# ---------------------------------------------------------
+st.sidebar.header("⚙️ Account Parameters")
 call_volume = st.sidebar.number_input("Monthly Call Volume (Minutes)", value=340000, step=10000)
 aht = st.sidebar.number_input("Average Handle Time (Seconds)", value=600, step=10)
 target_sl = st.sidebar.slider("Target Service Level (%)", 50, 100, 80)
@@ -18,164 +22,166 @@ ooo = st.sidebar.number_input("Out-of-Office Overhead (%)", value=16.0)
 
 total_shrinkage = ioo + ooo
 
-# Rotation Length Selector (2 to 10 Weeks)
-st.sidebar.header("🔄 Rotation Settings")
-rotation_weeks = st.sidebar.slider("Full-Time Rotation Cycle (Weeks)", 2, 10, 4)
+st.sidebar.header("🔄 Rotation Cycle")
+rotation_weeks = st.sidebar.slider("Rotation Cycle Length (Weeks)", 2, 10, 10)
 
-# Capacity Calculations
+# Dynamic Calculations
+total_calls_forecast = call_volume / (aht / 60)
 raw_workload_hours = call_volume / 60
 gross_workload_hours = raw_workload_hours / (1 - (total_shrinkage / 100))
 required_fte = round(gross_workload_hours / 168, 2)
 
-# Top Metrics Dashboard
-st.subheader("📊 Strategic WFM Overview (Operating Hours: 07:00 - 22:00)")
+# Top Metrics Bar
+st.subheader("📊 Dynamic Executive Overview")
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("Active Roster Size", "70 Agents")
+col1.metric("Total Monthly Calls", f"{int(total_calls_forecast):,}")
 col2.metric("Required Capacity", f"{required_fte} FTE")
-col3.metric("Target SL", f"{target_sl}/{target_time}s")
+col3.metric("Target SL", f"{target_sl}% in {target_time}s")
 col4.metric("Total Shrinkage", f"{round(total_shrinkage, 2)}%")
 
 st.markdown("---")
 
-# Navigation Tabs
+# ---------------------------------------------------------
+# TAB NAVIGATION
+# ---------------------------------------------------------
 tab1, tab2, tab3, tab4 = st.tabs([
-    f"🔄 {rotation_weeks}-Week Rotation Model", 
-    "📅 Agent Roster & Tag Compliance", 
-    "🧮 Interval Capacity (07:00-22:00)", 
-    "💡 Strategic AI Advice"
+    "📈 Forecast vs. Planned Capacity Chart",
+    "🔄 Dynamic Shift Rotation (Mon-Sun)",
+    "📋 Verfügbarkeitsliste & Priority Tags",
+    "🧮 Interval Distribution (Swisscom 07:00-22:00)"
 ])
 
-# TAB 1: ROTATION MODEL
+# ---------------------------------------------------------
+# TAB 1: CHART & DYNAMIC RE-CALCULATION
+# ---------------------------------------------------------
 with tab1:
-    st.header(f"🔄 Swisscom Multi-Week Shift Rotation ({rotation_weeks} Cycles)")
-    st.markdown("""
-    **Shift Color Legend:**
-    * 🔵 **Morning (Blue):** `07:00 - 15:30`
-    * 🟢 **Day (Green):** `08:30 - 17:00`
-    * 🟠 **Evening (Orange):** `12:00 - 20:30`
-    * 🟣 **Late Evening (Purple):** `13:30 - 22:00`
-    * 🔷 **Night / Closing (Dark Blue):** `14:00 - 22:00`
-    """)
+    st.header("📈 Interval Workload vs. Planned Staffing Capacity")
+    st.write("Dynamic re-calculation across all 30-minute operational intervals (07:00 to 22:00 CET):")
+    
+    # 30-min Intervals from 07:00 to 22:00
+    intervals = [f"{h:02d}:{m:02d}" for h in range(7, 22) for m in (0, 30)] + ["22:00"]
+    
+    # Bell-curve workload distribution curve representing Swisscom volume profile
+    base_curve = np.array([
+        0.01, 0.02, 0.035, 0.05, 0.07, 0.085, 0.095, 0.10, 0.095, 0.09, 
+        0.085, 0.08, 0.075, 0.07, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 
+        0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.008, 0.005, 0.002, 0.001, 0.0
+    ])
+    
+    normalized_curve = base_curve / base_curve.sum()
+    interval_minutes = call_volume * normalized_curve
+    interval_calls = interval_minutes / (aht / 60)
+    
+    # Erlang-C Net & Gross FTE Calculation per interval
+    erlangs = (interval_calls * aht) / 1800
+    net_fte_req = [math.ceil(e / 0.85) if e > 0 else 0 for e in erlangs]
+    gross_fte_req = [math.ceil(n / (1 - (total_shrinkage / 100))) if n > 0 else 0 for n in net_fte_req]
+    
+    # Interactive Plotly Chart
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=intervals, y=gross_fte_req, mode='lines+markers', name='Gross Required FTE', line=dict(color='red', width=3)))
+    fig.add_trace(go.Bar(x=intervals, y=net_fte_req, name='Net On-Queue FTE Target', marker_color='royalblue', opacity=0.6))
+    
+    fig.update_layout(
+        title="Interval FTE Demand & Capacity Curve (07:00 - 22:00)",
+        xaxis_title="Operational Interval (30-min)",
+        yaxis_title="Staffing Level (FTE)",
+        hovermode="x unified",
+        template="plotly_white"
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
 
-    # Dynamic generation of rotation weeks based on slider
-    rot_data = {
+# ---------------------------------------------------------
+# TAB 2: MULTI-WEEK ROTATION (MON-SUN & 50/50 PT SPLIT)
+# ---------------------------------------------------------
+with tab2:
+    st.header(f"🔄 Multi-Week Rotation Matrix ({rotation_weeks}-Week Cycle)")
+    st.markdown("""
+    **Color-Coded Shift Legend:**
+    * 🔵 **Morning:** `07:00 - 15:30` | 🟢 **Day:** `08:30 - 17:00` | 🟠 **Evening:** `12:00 - 20:30` | 🟣 **Late Evening:** `13:30 - 22:00` | 🔷 **EoB Closing:** `14:00 - 22:00`
+    """)
+    
+    st.subheader("Part-Time Alternating 50/50 Rotation Logic")
+    st.info("Half of the Part-Time team works from **08:00** in odd weeks and until **EoB (22:00)** in even weeks. The other half works until **EoB (22:00)** in odd weeks and starts at **08:00** in even weeks.")
+    
+    selected_week = st.selectbox("Select Week to View Daily Coverage (Mon - Sun):", [f"Week {w}" for w in range(1, rotation_weeks + 1)])
+    week_idx = int(selected_week.split(" ")[1])
+    
+    pt_half1_shift = "08:00 - 13:00 (Start 08:00)" if week_idx % 2 != 0 else "17:00 - 22:00 (EoB Close)"
+    pt_half2_shift = "17:00 - 22:00 (EoB Close)" if week_idx % 2 != 0 else "08:00 - 13:00 (Start 08:00)"
+    
+    days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    
+    rotation_schedule = {
         "Cohort Group": [
-            "Restricted / ChildU1 / ChildU2", 
-            "Minors (U18_PT_5 & U18_PT_4)", 
-            "Part-Time (PT Block)", 
-            "Flexible Full-Time (Group 1)", 
-            "Flexible Full-Time (Group 2)"
-        ],
-        "Scheduling Rule": [
-            "Fixed Day / Morning (No late shifts)", 
-            "Max 4-5 hrs, 30m break, off by 20:00", 
-            "W1: Starts 08:00 | W2: Ends at Close (22:00)", 
-            f"Rotates across {rotation_weeks} weeks for balanced interval coverage", 
-            f"Offset rotation across {rotation_weeks} weeks to eliminate peaks/valleys"
+            "ChildU1 / ChildU2 (Restricted)",
+            "Minors (U18_PT_5 & U18_PT_4)",
+            "Part-Time Group 1 (50% Split)",
+            "Part-Time Group 2 (50% Split)",
+            "Flexible Full-Time Group A",
+            "Flexible Full-Time Group B"
         ]
     }
     
-    shifts_pool = [
-        "🔵 Morning (07:00-15:30)", 
-        "🟢 Day (08:30-17:00)", 
-        "🟠 Evening (12:00-20:30)", 
-        "🟣 Late Evening (13:30-22:00)", 
-        "🔷 Closing (14:00-22:00)"
-    ]
-    
-    for w in range(1, rotation_weeks + 1):
-        rot_data[f"Week {w}"] = [
-            "🟢 Day (08:30-17:00)", 
-            "🔵 Morning (Max 5h, off <20:00)", 
-            "08:00 Start (W1) / 22:00 End (W2)" if w <= 2 else "🟢 Day (08:30-17:00)", 
-            shifts_pool[(w - 1) % len(shifts_pool)],
-            shifts_pool[(w + 1) % len(shifts_pool)]
-        ]
-
-    df_rot_matrix = pd.DataFrame(rot_data)
-    st.dataframe(df_rot_matrix, use_container_width=True)
-
-# TAB 2: AGENT ROSTER & TAG COMPLIANCE
-with tab2:
-    st.header("📋 70-Agent Master Roster & Constraint Validation")
-    st.write("Agents are prioritized by constraints (`ChildU1`, `ChildU2`, `U18_PT_5`, `U18_PT_4`) before flexible full-timers are scheduled.")
-
-    sample_roster = []
-    names = [
-        "Valmir", "Ardit", "Blerta", "Granit", "Erblin", "Drenusha", "Leon", "Faton", "Vjosa", "Besart",
-        "Klea", "Dardan", "Kaltrina", "Yll", "Rina", "Meriton", "Erand", "Donjeta", "Trim", "Zana",
-        "Agon", "Teuta", "Drin", "Liridon", "Edona", "Artan", "Flaka", "Blerim", "Doruntina", "Genc"
-    ]
-    
-    for i in range(1, 71):
-        name = names[(i - 1) % len(names)] + f" {i}"
-        if i <= 5:
-            tag = "ChildU1" if i % 2 == 0 else "ChildU2"
-            c_type = "Full-Time"
-            shift = "🟢 Day (08:30-17:00)"
-        elif i <= 10:
-            tag = "U18_PT_5" if i % 2 == 0 else "U18_PT_4"
-            c_type = "Part-Time (Minor)"
-            shift = "🔵 Morning (Max 5h, off <20:00)"
-        elif i <= 25:
-            tag = "Standard PT"
-            c_type = "Part-Time"
-            shift = "08:00 Start (W1) / 22:00 End (W2)"
+    for day in days:
+        if day in ["Saturday", "Sunday"]:
+            rotation_schedule[day] = [
+                "OFF", 
+                "OFF", 
+                "08:00 - 13:00" if week_idx % 2 != 0 else "OFF",
+                "OFF" if week_idx % 2 != 0 else "08:00 - 13:00",
+                "08:30 - 17:00" if week_idx % 2 == 0 else "OFF",
+                "OFF" if week_idx % 2 == 0 else "13:30 - 22:00"
+            ]
         else:
-            tag = "Flexible FT"
-            c_type = "Full-Time"
-            shift = "Flexible Rotation"
+            rotation_schedule[day] = [
+                "🟢 Day (08:30-17:00)",
+                "🔵 Morning (<5h, off <20:00)",
+                pt_half1_shift,
+                pt_half2_shift,
+                "🔵 Morning (07:00-15:30)" if week_idx % 3 == 1 else ("🟢 Day (08:30-17:00)" if week_idx % 3 == 2 else "🟣 Late (13:30-22:00)"),
+                "🟣 Late (13:30-22:00)" if week_idx % 3 == 1 else ("🔵 Morning (07:00-15:30)" if week_idx % 3 == 2 else "🟢 Day (08:30-17:00)")
+            ]
+            
+    df_week_view = pd.DataFrame(rotation_schedule)
+    st.dataframe(df_week_view, use_container_width=True)
 
-        sample_roster.append({
-            "Agent Name": name,
-            "Contract Type": c_type,
-            "Constraint Tag": tag,
-            "Assigned Shift": shift,
-            "Max Daily Hours": 5 if "U18_PT_5" in tag else (4 if "U18_PT_4" in tag else (6 if "Part-Time" in c_type else 8)),
-            "Mandatory Break": "30 mins" if "U18" in tag else "60 mins"
-        })
-
-    df_master = pd.DataFrame(sample_roster)
-    edited_master = st.data_editor(df_master, num_rows="dynamic", use_container_width=True)
-
-    csv_out = edited_master.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="📥 Export Swisscom Master Roster & Compliance CSV",
-        data=csv_out,
-        file_name="Swisscom_70Agent_Master_Roster.csv",
-        mime="text/css" if False else "text/csv"
-    )
-
-# TAB 3: INTERVAL CAPACITY (07:00 - 22:00)
+# ---------------------------------------------------------
+# TAB 3: VERFÜGBARKEITSLISTE DATA SETUP
+# ---------------------------------------------------------
 with tab3:
-    st.header("🧮 Interval Staffing Model (07:00 to 22:00)")
-    st.write("Evaluating staffing coverage across Swisscom's full operating window to eliminate morning/evening variance.")
+    st.header("📋 Verfügbarkeitsliste Upload & Priority Tagging")
+    st.write("Upload your official **Verfügbarkeitsliste** CSV/Excel file containing employee names and constraint tags:")
+    
+    uploaded_file = st.file_uploader("Upload Verfügbarkeitsliste (CSV or Excel)", type=["csv", "xlsx"])
+    
+    if uploaded_file is not None:
+        try:
+            if uploaded_file.name.endswith(".csv"):
+                df_custom = pd.read_csv(uploaded_file)
+            else:
+                df_custom = pd.read_excel(uploaded_file)
+            st.success("Successfully loaded Verfügbarkeitsliste!")
+            st.dataframe(df_custom, use_container_width=True)
+        except Exception as e:
+            st.error(f"Error loading file: {e}")
+    else:
+        st.info("💡 To populate real employee names directly from your file, upload your `Verfügbarkeitsliste.xlsx` above.")
 
-    interval_time = st.selectbox("Select 30-Minute Interval Window", [
-        "07:00 - 07:30 (Opening)", "07:30 - 08:00", "08:00 - 08:30", "08:30 - 09:00",
-        "09:00 - 09:30", "09:30 - 10:00", "10:00 - 10:30 (Peak Ramp)", "10:30 - 11:00",
-        "11:00 - 11:30", "11:30 - 12:00", "12:00 - 12:30 (Midday Peak)", "12:30 - 13:00",
-        "13:00 - 13:30", "13:30 - 14:00", "14:00 - 14:30", "14:30 - 15:00",
-        "15:00 - 15:30", "15:30 - 16:00", "16:00 - 16:30", "16:30 - 17:00",
-        "17:00 - 17:30", "17:30 - 18:00", "18:00 - 18:30", "18:30 - 19:00",
-        "19:00 - 19:30", "19:30 - 20:00", "20:00 - 20:30 (Evening Taper)", "20:30 - 21:00",
-        "21:00 - 21:30", "21:30 - 22:00 (Closing)"
-    ])
-
-    sim_volume = st.number_input("Call Volume in Selected Interval", value=75, step=5)
-    erlangs_val = (sim_volume * aht) / 1800
-    net_req = math.ceil(erlangs_val / 0.85)
-    gross_req = math.ceil(net_req / (1 - (total_shrinkage / 100)))
-
-    c1, c2 = st.columns(2)
-    c1.metric("Net Staffing Required (On-Queue)", f"{net_req} Agents")
-    c2.metric("Gross Roster Needed (with Shrinkage)", f"{gross_req} Agents")
-
-# TAB 4: AI ADVICE
+# ---------------------------------------------------------
+# TAB 4: INTERVAL BREAKDOWN TABLE
+# ---------------------------------------------------------
 with tab4:
-    st.header("🧙‍♂️ Ohara Strategic Advice & Variance Control")
-    st.success("""
-    **Multi-Week Balancing Active:** 
-    * By scheduling restricted tags (`ChildU1`, `ChildU2`, `U18_PT_5`, `U18_PT_4`) first into fixed morning/day bands, Ohara reserves flexible full-time agents for the {}-week rotation.
-    * This ensures morning intervals do not suffer 20% understaffing while evening intervals sit at 5%. Interval variance is successfully smoothed out across the 07:00 - 22:00 operational window.
-    """.format(rotation_weeks))
+    st.header("🧮 Interval Breakdown Table (07:00 - 22:00)")
+    
+    df_intervals = pd.DataFrame({
+        "Interval Window": intervals[:-1],
+        "Forecast Call Volume": np.round(interval_calls[:-1], 1),
+        "Forecast Workload (Mins)": np.round(interval_minutes[:-1], 1),
+        "Erlangs": np.round(erlangs[:-1], 2),
+        "Net Required FTE": net_fte_req[:-1],
+        "Gross Required FTE": gross_fte_req[:-1]
+    })
+    
+    st.dataframe(df_intervals, use_container_width=True)
