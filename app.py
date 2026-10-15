@@ -24,7 +24,7 @@ total_shrinkage = ioo + ooo
 st.sidebar.header("🔄 Rotation Cycle")
 rotation_weeks = st.sidebar.slider("Rotation Cycle Length (Weeks)", 2, 10, 10)
 
-st.sidebar.header("📁 Data Sources (Point 1 & 2)")
+st.sidebar.header("📁 Data Sources")
 verteilung_file = st.sidebar.file_uploader("Upload Call Verteilung File (.xlsx/.csv)", type=["xlsx", "csv"], key="verteilung")
 verfuegbarkeit_file = st.sidebar.file_uploader("Upload Verfügbarkeitsliste (.xlsx/.csv)", type=["xlsx", "csv"], key="verfuegbarkeit")
 
@@ -45,49 +45,19 @@ col4.metric("Total Shrinkage", f"{round(total_shrinkage, 2)}%")
 st.markdown("---")
 
 # ---------------------------------------------------------
-# INTERVAL DISTRIBUTION SETUP (Point 2)
+# INTERVAL DISTRIBUTION SETUP (07:00 - 22:00 CET)
 # ---------------------------------------------------------
-intervals = [f"{h:02d}:{m:02d}" for h in range(7, 22) for m in (0, 30)] + ["22:00"]
+intervals = [f"{h:02d}:{m:02d}" for h in range(7, 22) for m in (0, 30)]
 
-if verteilung_file is not None:
-    try:
-        if verteilung_file.name.endswith(".csv"):
-            df_dist_raw = pd.read_csv(verteilung_file)
-        else:
-            df_dist_raw = pd.read_excel(verteilung_file)
-        st.sidebar.success("Loaded Call Verteilung file!")
-        # Map values if file structure exists, else fallback to curve
-        if "Interval" in df_dist_raw.columns and "Volume" in df_dist_raw.columns:
-            interval_calls = df_dist_raw["Volume"].values[:len(intervals)-1]
-            interval_minutes = interval_calls * (aht / 60)
-        else:
-            base_curve = np.array([
-                0.01, 0.02, 0.035, 0.05, 0.07, 0.085, 0.095, 0.10, 0.095, 0.09, 
-                0.085, 0.08, 0.075, 0.07, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 
-                0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.008, 0.005, 0.002, 0.001
-            ])
-            normalized_curve = base_curve / base_curve.sum()
-            interval_minutes = call_volume * normalized_curve
-            interval_calls = interval_minutes / (aht / 60)
-    except Exception as e:
-        st.sidebar.error(f"Error reading Call Verteilung: {e}")
-        base_curve = np.array([
-            0.01, 0.02, 0.035, 0.05, 0.07, 0.085, 0.095, 0.10, 0.095, 0.09, 
-            0.085, 0.08, 0.075, 0.07, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 
-            0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.008, 0.005, 0.002, 0.001
-        ])
-        normalized_curve = base_curve / base_curve.sum()
-        interval_minutes = call_volume * normalized_curve
-        interval_calls = interval_minutes / (aht / 60)
-else:
-    base_curve = np.array([
-        0.01, 0.02, 0.035, 0.05, 0.07, 0.085, 0.095, 0.10, 0.095, 0.09, 
-        0.085, 0.08, 0.075, 0.07, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 
-        0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.008, 0.005, 0.002, 0.001
-    ])
-    normalized_curve = base_curve / base_curve.sum()
-    interval_minutes = call_volume * normalized_curve
-    interval_calls = interval_minutes / (aht / 60)
+base_curve = np.array([
+    0.01, 0.02, 0.035, 0.05, 0.07, 0.085, 0.095, 0.10, 0.095, 0.09, 
+    0.085, 0.08, 0.075, 0.07, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 
+    0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.008, 0.005, 0.002, 0.001
+])
+
+normalized_curve = base_curve / base_curve.sum()
+interval_minutes = call_volume * normalized_curve
+interval_calls = interval_minutes / (aht / 60)
 
 # Erlang-C Net & Gross FTE Calculation per interval
 erlangs = (interval_calls * aht) / 1800
@@ -105,7 +75,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
 ])
 
 # ---------------------------------------------------------
-# TAB 1: VERFÜGBARKEITSLISTE & AUTO-MAPPING (Point 1)
+# TAB 1: VERFÜGBARKEITSLISTE & AUTO-MAPPING
 # ---------------------------------------------------------
 with tab1:
     st.header("📋 Verfügbarkeitsliste & Priority Constraint Auto-Mapping")
@@ -166,7 +136,7 @@ with tab1:
         st.dataframe(df_roster_mapped, use_container_width=True)
 
 # ---------------------------------------------------------
-# TAB 2: CHART & DYNAMIC RE-CALCULATION (Point 2)
+# TAB 2: CHART & DYNAMIC RE-CALCULATION
 # ---------------------------------------------------------
 with tab2:
     st.header("📈 Interval Workload vs. Planned Staffing Capacity")
@@ -175,4 +145,74 @@ with tab2:
     df_chart = pd.DataFrame({
         "Gross Required FTE": gross_fte_req,
         "Net On-Queue FTE Target": net_fte_req
-    },
+    }, index=intervals)
+    
+    st.line_chart(df_chart)
+
+# ---------------------------------------------------------
+# TAB 3: MULTI-WEEK ROTATION (MON-SUN & 50/50 PT SPLIT)
+# ---------------------------------------------------------
+with tab3:
+    st.header(f"🔄 Multi-Week Rotation Matrix ({rotation_weeks}-Week Cycle)")
+    st.markdown("""
+    **Color-Coded Shift Legend:**
+    * 🔵 **Morning:** `07:00 - 15:30` | 🟢 **Day:** `08:30 - 17:00` | 🟠 **Evening:** `12:00 - 20:30` | 🟣 **Late Evening:** `13:30 - 22:00` | 🔷 **EoB Closing:** `14:00 - 22:00`
+    """)
+    
+    selected_week = st.selectbox("Select Week to View Daily Coverage (Mon - Sun):", [f"Week {w}" for w in range(1, rotation_weeks + 1)])
+    week_idx = int(selected_week.split(" ")[1])
+    
+    pt_half1_shift = "08:00 - 13:00 (Start 08:00)" if week_idx % 2 != 0 else "17:00 - 22:00 (EoB Close)"
+    pt_half2_shift = "17:00 - 22:00 (EoB Close)" if week_idx % 2 != 0 else "08:00 - 13:00 (Start 08:00)"
+    
+    days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    
+    rotation_schedule = {
+        "Cohort Group": [
+            "ChildU1 / ChildU2 (Restricted)",
+            "Minors (U18_PT_5 & U18_PT_4)",
+            "Part-Time Group 1 (50% Split)",
+            "Part-Time Group 2 (50% Split)",
+            "Flexible Full-Time Group A",
+            "Flexible Full-Time Group B"
+        ]
+    }
+    
+    for day in days:
+        if day in ["Saturday", "Sunday"]:
+            rotation_schedule[day] = [
+                "OFF", "OFF", 
+                "08:00 - 13:00" if week_idx % 2 != 0 else "OFF",
+                "OFF" if week_idx % 2 != 0 else "08:00 - 13:00",
+                "08:30 - 17:00" if week_idx % 2 == 0 else "OFF",
+                "OFF" if week_idx % 2 == 0 else "13:30 - 22:00"
+            ]
+        else:
+            rotation_schedule[day] = [
+                "🟢 Day (08:30-17:00)",
+                "🔵 Morning (<5h, off <20:00)",
+                pt_half1_shift,
+                pt_half2_shift,
+                "🔵 Morning (07:00-15:30)" if week_idx % 3 == 1 else ("🟢 Day (08:30-17:00)" if week_idx % 3 == 2 else "🟣 Late (13:30-22:00)"),
+                "🟣 Late (13:30-22:00)" if week_idx % 3 == 1 else ("🔵 Morning (07:00-15:30)" if week_idx % 3 == 2 else "🟢 Day (08:30-17:00)")
+            ]
+            
+    df_week_view = pd.DataFrame(rotation_schedule)
+    st.dataframe(df_week_view, use_container_width=True)
+
+# ---------------------------------------------------------
+# TAB 4: INTERVAL BREAKDOWN TABLE
+# ---------------------------------------------------------
+with tab4:
+    st.header("🧮 Interval Breakdown Table (07:00 - 22:00)")
+    
+    df_intervals = pd.DataFrame({
+        "Interval Window": intervals,
+        "Forecast Call Volume": np.round(interval_calls, 1),
+        "Forecast Workload (Mins)": np.round(interval_minutes, 1),
+        "Erlangs": np.round(erlangs, 2),
+        "Net Required FTE": net_fte_req,
+        "Gross Required FTE": gross_fte_req
+    })
+    
+    st.dataframe(df_intervals, use_container_width=True)
