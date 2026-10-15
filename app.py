@@ -26,7 +26,6 @@ month_num_map = {
 month_num = month_num_map[selected_month_name]
 year = 2026
 
-# Determine days in selected month dynamically
 if month_num in [1, 3, 5, 7, 8, 10, 12]:
     total_month_days = 31
 elif month_num in [4, 6, 9, 11]:
@@ -67,44 +66,82 @@ col4.metric("Total Shrinkage", f"{round(total_shrinkage, 2)}%")
 st.markdown("---")
 
 # ---------------------------------------------------------
-# CALENDAR MATRIX COMPUTATION
+# CALENDAR MATRIX COMPUTATION & FILE PARSING
 # ---------------------------------------------------------
 intervals = [f"{h:02d}:{m:02d}" for h in range(7, 22) for m in (0, 30)]
 
-weekday_base = np.array([
-    0.01, 0.02, 0.035, 0.05, 0.07, 0.085, 0.095, 0.10, 0.095, 0.09, 
-    0.085, 0.08, 0.075, 0.07, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 
-    0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.008, 0.005, 0.002, 0.001
-])
-
-weekend_base = np.array([
-    0.005, 0.01, 0.02, 0.03, 0.05, 0.07, 0.08, 0.09, 0.085, 0.08, 
-    0.075, 0.07, 0.06, 0.05, 0.04, 0.03, 0.02, 0.015, 0.01, 0.008, 
-    0.005, 0.003, 0.002, 0.001, 0.001, 0.0, 0.0, 0.0, 0.0, 0.0
-])
-
-daily_curves = {
-    "Monday": (weekday_base * 1.15) / (weekday_base * 1.15).sum(),
-    "Tuesday": weekday_base / weekday_base.sum(),
-    "Wednesday": weekday_base / weekday_base.sum(),
-    "Thursday": weekday_base / weekday_base.sum(),
-    "Friday": (weekday_base * 0.95) / (weekday_base * 0.95).sum(),
-    "Saturday": weekend_base / weekend_base.sum(),
-    "Sunday": (weekend_base * 0.6) / (weekend_base * 0.6).sum()
+# Distinct baseline shapes for every day of the week (07:00 to 22:00 = 30 intervals)
+base_curves_default = {
+    "Monday": np.array([0.01, 0.02, 0.035, 0.05, 0.07, 0.09, 0.10, 0.11, 0.10, 0.09, 0.08, 0.07, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 0.035, 0.03, 0.025, 0.02, 0.015, 0.012, 0.01, 0.008, 0.006, 0.004, 0.002, 0.001]),
+    "Tuesday": np.array([0.012, 0.022, 0.04, 0.055, 0.075, 0.085, 0.09, 0.095, 0.09, 0.085, 0.08, 0.075, 0.07, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 0.035, 0.03, 0.025, 0.02, 0.015, 0.012, 0.01, 0.007, 0.005, 0.003, 0.001]),
+    "Wednesday": np.array([0.015, 0.025, 0.038, 0.052, 0.072, 0.088, 0.092, 0.098, 0.092, 0.088, 0.082, 0.078, 0.072, 0.068, 0.062, 0.058, 0.052, 0.048, 0.042, 0.038, 0.032, 0.028, 0.022, 0.018, 0.014, 0.01, 0.008, 0.005, 0.003, 0.001]),
+    "Thursday": np.array([0.011, 0.021, 0.037, 0.049, 0.069, 0.083, 0.093, 0.102, 0.094, 0.089, 0.083, 0.079, 0.073, 0.069, 0.063, 0.059, 0.053, 0.049, 0.043, 0.039, 0.033, 0.029, 0.023, 0.019, 0.015, 0.011, 0.008, 0.005, 0.003, 0.001]),
+    "Friday": np.array([0.013, 0.023, 0.041, 0.053, 0.073, 0.081, 0.088, 0.094, 0.088, 0.084, 0.079, 0.075, 0.071, 0.067, 0.063, 0.059, 0.055, 0.05, 0.045, 0.04, 0.035, 0.03, 0.025, 0.02, 0.016, 0.012, 0.009, 0.006, 0.003, 0.001]),
+    "Saturday": np.array([0.008, 0.015, 0.025, 0.035, 0.05, 0.065, 0.075, 0.085, 0.08, 0.075, 0.07, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 0.035, 0.03, 0.025, 0.02, 0.016, 0.012, 0.009, 0.007, 0.005, 0.003, 0.002, 0.001, 0.001]),
+    "Sunday": np.array([0.005, 0.01, 0.018, 0.028, 0.04, 0.055, 0.065, 0.075, 0.07, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 0.035, 0.03, 0.025, 0.02, 0.016, 0.012, 0.009, 0.007, 0.005, 0.003, 0.002, 0.001, 0.001, 0.001, 0.001])
 }
+
+daily_curves = {}
+days_mapping = {
+    "Monday": ["monday", "montag", "mon"],
+    "Tuesday": ["tuesday", "dienstag", "tue"],
+    "Wednesday": ["wednesday", "mittwoch", "wed"],
+    "Thursday": ["thursday", "donnerstag", "thu"],
+    "Friday": ["friday", "freitag", "fri"],
+    "Saturday": ["saturday", "samstag", "sat"],
+    "Sunday": ["sunday", "sonntag", "sun"]
+}
+
+file_parsed = False
+if verteilung_file is not None:
+    try:
+        if verteilung_file.name.endswith(".csv"):
+            df_hist = pd.read_csv(verteilung_file)
+        else:
+            df_hist = pd.read_excel(verteilung_file)
+        
+        df_hist.columns = [str(c).strip().lower() for c in df_hist.columns]
+        
+        for std_day, aliases in days_mapping.items():
+            matched_col = None
+            for alias in aliases:
+                for col in df_hist.columns:
+                    if alias in col:
+                        matched_col = col
+                        break
+                if matched_col:
+                    break
+            
+            if matched_col:
+                vals = pd.to_numeric(df_hist[matched_col], errors='coerce').fillna(0).values[:len(intervals)]
+                if len(vals) == len(intervals) and vals.sum() > 0:
+                    daily_curves[std_day] = vals / vals.sum()
+                    file_parsed = True
+                else:
+                    daily_curves[std_day] = base_curves_default[std_day] / base_curves_default[std_day].sum()
+            else:
+                daily_curves[std_day] = base_curves_default[std_day] / base_curves_default[std_day].sum()
+                
+        if file_parsed:
+            st.sidebar.success("Successfully parsed day-specific distributions from file!")
+    except Exception as e:
+        st.sidebar.error(f"Error reading file: {e}")
+
+if not file_parsed:
+    for day in days_mapping.keys():
+        daily_curves[day] = base_curves_default[day] / base_curves_default[day].sum()
 
 weekday_abbr_map = {0: "Mo", 1: "Tu", 2: "We", 3: "Th", 4: "Fr", 5: "Sa", 6: "Su"}
 weekday_full_map = {0: "Monday", 1: "Tuesday", 2: "Wednesday", 3: "Thursday", 4: "Friday", 5: "Saturday", 6: "Sunday"}
 
-# Calculate total month curve weight to normalize volume accurately
+# Calculate total month curve weight to normalize volume accurately across all days
 month_total_weight = 0
 for day_num in range(1, total_month_days + 1):
     dt = datetime.date(year, month_num, day_num)
     day_full = weekday_full_map[dt.weekday()]
-    day_factor = 1.2 if day_full == "Monday" else (0.5 if day_full == "Saturday" else (0.3 if day_full == "Sunday" else 1.0))
+    day_factor = 1.2 if day_full == "Monday" else (0.7 if day_full in ["Saturday", "Sunday"] else 1.0)
     month_total_weight += day_factor
 
-# Build DataFrames with MultiIndex Columns: Row 1 = Date ("01"), Row 2 = Weekday ("Tu")
 dict_mins = {interval: {} for interval in intervals}
 dict_calls = {interval: {} for interval in intervals}
 dict_net = {interval: {} for interval in intervals}
@@ -119,7 +156,7 @@ for day_num in range(1, total_month_days + 1):
     col_tuple = (date_str, day_abbr)
     curve = daily_curves[day_full]
     
-    day_factor = 1.2 if day_full == "Monday" else (0.5 if day_full == "Saturday" else (0.3 if day_full == "Sunday" else 1.0))
+    day_factor = 1.2 if day_full == "Monday" else (0.7 if day_full in ["Saturday", "Sunday"] else 1.0)
     daily_mins = (call_volume / month_total_weight) * day_factor
     
     for idx, interval in enumerate(intervals):
@@ -139,7 +176,6 @@ df_matrix_calls = pd.DataFrame(dict_calls).T
 df_matrix_net = pd.DataFrame(dict_net).T
 df_matrix_gross = pd.DataFrame(dict_gross).T
 
-# Structure MultiIndex for headers
 columns_multiindex = pd.MultiIndex.from_tuples(df_matrix_mins.columns, names=["Date", "Day"])
 df_matrix_mins.columns = columns_multiindex
 df_matrix_calls.columns = columns_multiindex
