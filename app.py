@@ -56,7 +56,6 @@ st.markdown("---")
 # ---------------------------------------------------------
 intervals = [f"{h:02d}:{m:02d}" for h in range(7, 22) for m in (0, 30)]
 
-# Default fallback curves per day type (Monday to Sunday)
 default_base = np.array([
     0.01, 0.02, 0.035, 0.05, 0.07, 0.085, 0.095, 0.10, 0.095, 0.09, 
     0.085, 0.08, 0.075, 0.07, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 
@@ -64,10 +63,17 @@ default_base = np.array([
 ])
 
 daily_curves = {}
-days_list = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+days_mapping = {
+    "Monday": ["monday", "montag", "mon"],
+    "Tuesday": ["tuesday", "dienstag", "tue"],
+    "Wednesday": ["wednesday", "mittwoch", "wed"],
+    "Thursday": ["thursday", "donnerstag", "thu"],
+    "Friday": ["friday", "freitag", "fri"],
+    "Saturday": ["saturday", "samstag", "sat"],
+    "Sunday": ["sunday", "sonntag", "sun"]
+}
 
-# Check if uploaded file contains day-specific columns, otherwise use weighted variations
-loaded_from_file = False
+file_loaded_successfully = False
 if verteilung_file is not None:
     try:
         if verteilung_file.name.endswith(".csv"):
@@ -75,29 +81,40 @@ if verteilung_file is not None:
         else:
             df_hist = pd.read_excel(verteilung_file)
         
-        # If columns match days of week, extract day-specific profiles
-        for day in days_list:
-            if day in df_hist.columns:
-                vals = df_hist[day].values[:len(intervals)]
-                daily_curves[day] = vals / vals.sum()
-                loaded_from_file = True
+        # Clean column names
+        df_hist.columns = [str(c).strip().lower() for c in df_hist.columns]
+        
+        for std_day, aliases in days_mapping.items():
+            matched_col = None
+            for alias in aliases:
+                for col in df_hist.columns:
+                    if alias in col:
+                        matched_col = col
+                        break
+                if matched_col:
+                    break
+            
+            if matched_col:
+                vals = pd.to_numeric(df_hist[matched_col], errors='coerce').fillna(0).values[:len(intervals)]
+                if len(vals) == len(intervals) and vals.sum() > 0:
+                    daily_curves[std_day] = vals / vals.sum()
+                    file_loaded_successfully = True
+                else:
+                    daily_curves[std_day] = default_base / default_base.sum()
             else:
-                # Add slight variance if individual columns aren't explicitly named by day
-                daily_curves[day] = default_base / default_base.sum()
-        if loaded_from_file:
-            st.sidebar.success("Loaded day-by-day profiles from Call Verteilung!")
+                daily_curves[std_day] = default_base / default_base.sum()
+                
+        if file_loaded_successfully:
+            st.sidebar.success("Successfully parsed day-by-day distribution from file!")
     except Exception as e:
         st.sidebar.error(f"Error parsing file: {e}")
 
-if not loaded_from_file:
-    for i, day in enumerate(days_list):
-        # Apply slight curve shifts for weekdays vs weekends
-        shift_factor = 1.0 + (0.05 * (i % 3 - 1))
-        adjusted = default_base * shift_factor
-        daily_curves[day] = adjusted / adjusted.sum()
+if not file_loaded_successfully:
+    for day in days_mapping.keys():
+        daily_curves[day] = default_base / default_base.sum()
 
 # Day Selector for Tab 1
-selected_day_view = st.selectbox("Select Day of the Week to Inspect Interval Curve:", days_list, index=0)
+selected_day_view = st.selectbox("Select Day of the Week to Inspect Interval Curve:", list(days_mapping.keys()), index=0)
 
 active_curve = daily_curves[selected_day_view]
 daily_volume_mins = call_volume / working_days
@@ -123,7 +140,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
 # ---------------------------------------------------------
 with tab1:
     st.header(f"🧮 Interval Breakdown for {selected_day_view} ({selected_month})")
-    st.write(f"Reflecting the unique traffic distribution profile for **{selected_day_view}s** across Swisscom's operating hours (07:00 - 22:00 CET):")
+    st.write(f"Reflecting the unique traffic distribution profile for **{selected_day_view}s** from your uploaded data across Swisscom's operating hours (07:00 - 22:00 CET):")
     
     df_intervals = pd.DataFrame({
         "Interval Window": intervals,
@@ -228,6 +245,7 @@ with tab4:
     pt_half1_shift = "08:00 - 13:00 (Start 08:00)" if week_idx % 2 != 0 else "17:00 - 22:00 (EoB Close)"
     pt_half2_shift = "17:00 - 22:00 (EoB Close)" if week_idx % 2 != 0 else "08:00 - 13:00 (Start 08:00)"
     
+    days_list = list(days_mapping.keys())
     rotation_schedule = {
         "Cohort Group": [
             "ChildU1 / ChildU2 (Restricted)",
