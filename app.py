@@ -6,7 +6,7 @@ import math
 st.set_page_config(page_title="Ohara WFM - Swisscom Engine", layout="wide")
 
 st.title("🧙‍♂️ Ohara - Swisscom Strategic WFM Engine")
-st.markdown("Full Monthly Calendar Interval Distribution & Dynamic Multi-Week Rotation")
+st.markdown("Dynamic Calendar Matrix, Multi-Metric Controls & Strategic Shift Rotation")
 
 # ---------------------------------------------------------
 # SIDEBAR PARAMETERS & FILE UPLOADERS
@@ -56,11 +56,10 @@ col4.metric("Total Shrinkage", f"{round(total_shrinkage, 2)}%")
 st.markdown("---")
 
 # ---------------------------------------------------------
-# DAY-BY-DAY INTERVAL CURVES SETUP (07:00 - 22:00 CET)
+# CALENDAR MATRIX COMPUTATION
 # ---------------------------------------------------------
 intervals = [f"{h:02d}:{m:02d}" for h in range(7, 22) for m in (0, 30)]
 
-# Default day profile curves (Weekdays vs Weekends)
 weekday_base = np.array([
     0.01, 0.02, 0.035, 0.05, 0.07, 0.085, 0.095, 0.10, 0.095, 0.09, 
     0.085, 0.08, 0.075, 0.07, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 
@@ -83,31 +82,20 @@ daily_curves = {
     "Sunday": (weekend_base * 0.6) / (weekend_base * 0.6).sum()
 }
 
-# Parse uploaded file if provided
-if verteilung_file is not None:
-    try:
-        if verteilung_file.name.endswith(".csv"):
-            df_hist = pd.read_csv(verteilung_file)
-        else:
-            df_hist = pd.read_excel(verteilung_file)
-        df_hist.columns = [str(c).strip().lower() for c in df_hist.columns]
-        st.sidebar.success("Loaded Call Verteilung file!")
-    except Exception as e:
-        st.sidebar.error(f"Error reading file: {e}")
-
-# Build Full Month Calendar Grid
 days_of_week = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-
-# Calculate monthly total weights to scale daily volume accurately
 month_total_weight = sum([daily_curves[days_of_week[(d - 1) % 7]].sum() for d in range(1, total_month_days + 1)])
 
-# Build Master DataFrame for the entire month
-month_records = []
+# Data Dictionaries for Matrix
+dict_mins = {interval: {} for interval in intervals}
+dict_calls = {interval: {} for interval in intervals}
+dict_net = {interval: {} for interval in intervals}
+dict_gross = {interval: {} for interval in intervals}
+
 for d in range(1, total_month_days + 1):
     day_name = days_of_week[(d - 1) % 7]
+    col_label = f"Day {d} ({day_name[:3]})"
     curve = daily_curves[day_name]
     
-    # Scale daily volume based on weekday vs weekend demand profile
     day_weight_factor = 1.2 if day_name == "Monday" else (0.5 if day_name == "Saturday" else (0.3 if day_name == "Sunday" else 1.0))
     daily_mins = (call_volume / month_total_weight) * day_weight_factor
     
@@ -118,38 +106,127 @@ for d in range(1, total_month_days + 1):
         net_fte = math.ceil(erlang_val / 0.85) if erlang_val > 0 else 0
         gross_fte = math.ceil(net_fte / (1 - (total_shrinkage / 100))) if net_fte > 0 else 0
         
-        month_records.append({
-            "Day of Month": f"{selected_month} {d}",
-            "Weekday": day_name,
-            "Interval": interval,
-            "Workload Minutes": round(int_mins, 1),
-            "Distributed Calls": round(int_calls, 1),
-            "Erlangs": round(erlang_val, 2),
-            "Net Required FTE": net_fte,
-            "Gross Required FTE": gross_fte
-        })
+        dict_mins[interval][col_label] = round(int_mins, 1)
+        dict_calls[interval][col_label] = round(int_calls, 1)
+        dict_net[interval][col_label] = net_fte
+        dict_gross[interval][col_label] = gross_fte
 
-df_full_month = pd.DataFrame(month_records)
+df_matrix_mins = pd.DataFrame(dict_mins).T
+df_matrix_calls = pd.DataFrame(dict_calls).T
+df_matrix_net = pd.DataFrame(dict_net).T
+df_matrix_gross = pd.DataFrame(dict_gross).T
 
 # ---------------------------------------------------------
 # TAB NAVIGATION
 # ---------------------------------------------------------
 tab1, tab2, tab3, tab4 = st.tabs([
-    "🧮 Full Month Interval Workload Table",
-    "📈 Daily Forecast vs. Capacity Chart",
+    "🧮 Monthly Distribution Matrix",
+    "📈 Forecast vs. Capacity Chart",
     "📋 Verfügbarkeitsliste & Priority Auto-Mapping",
     "🔄 Dynamic Shift Rotation (Mon-Sun)"
 ])
 
 # ---------------------------------------------------------
-# TAB 1: FULL MONTH TABLE
+# TAB 1: MATRIX WITH METRIC TOGGLE
 # ---------------------------------------------------------
 with tab1:
-    st.header(f"🧮 Complete Monthly Interval Distribution — {selected_month}")
-    st.write(f"Showing interval distribution for all **{total_month_days} calendar days** with distinct weekday/weekend profiles:")
+    st.header(f"🧮 Monthly Calendar Matrix — {selected_month} ({total_month_days} Days)")
+    st.write("Vertical: 30-minute operational intervals (07:00 – 22:00) | Horizontal: Calendar days across the month")
     
-    # Filter by specific calendar day if desired
-    filter_day = st.selectbox("Filter View by Day of Month:", ["All Month"] + [f"{selected_month} {d}" for d in range(1, total_month_days + 1)])
+    metric_choice = st.radio(
+        "Select Display Metric:",
+        ["Workload Minutes (Min)", "Call Volume (Calls)", "Net Required FTE", "Gross Required FTE (with Shrinkage)"],
+        horizontal=True
+    )
     
-    if filter_day != "All Month":
-        df_display = df_full_month[df_full_month["Day of Month"] == filter_day]
+    if metric_choice == "Workload Minutes (Min)":
+        st.dataframe(df_matrix_mins, use_container_width=True)
+    elif metric_choice == "Call Volume (Calls)":
+        st.dataframe(df_matrix_calls, use_container_width=True)
+    elif metric_choice == "Net Required FTE":
+        st.dataframe(df_matrix_net, use_container_width=True)
+    else:
+        st.dataframe(df_matrix_gross, use_container_width=True)
+
+# ---------------------------------------------------------
+# TAB 2: CHART
+# ---------------------------------------------------------
+with tab2:
+    st.header(f"📈 Daily Interval Workload Chart — {selected_month}")
+    selected_chart_day_idx = st.slider("Select Day of Month to Plot:", 1, total_month_days, 1)
+    day_name_plot = days_of_week[(selected_chart_day_idx - 1) % 7]
+    col_key = f"Day {selected_chart_day_idx} ({day_name_plot[:3]})"
+    
+    df_chart_plot = pd.DataFrame({
+        "Gross Required FTE": df_matrix_gross[col_key],
+        "Net On-Queue FTE Target": df_matrix_net[col_key]
+    }, index=intervals)
+    
+    st.line_chart(df_chart_plot)
+
+# ---------------------------------------------------------
+# TAB 3: VERFÜGBARKEITSLISTE
+# ---------------------------------------------------------
+with tab3:
+    st.header("📋 Verfügbarkeitsliste & Priority Constraint Auto-Mapping")
+    if verfuegbarkeit_file is not None:
+        try:
+            if verfuegbarkeit_file.name.endswith(".csv"):
+                df_agents = pd.read_csv(verfuegbarkeit_file)
+            else:
+                df_agents = pd.read_excel(verfuegbarkeit_file)
+            st.success("Loaded Verfügbarkeitsliste!")
+            st.dataframe(df_agents, use_container_width=True)
+        except Exception as e:
+            st.error(f"Error parsing file: {e}")
+    else:
+        st.info("💡 Upload `Verfügbarkeitsliste.xlsx` in the sidebar to auto-populate exact agent names.")
+
+# ---------------------------------------------------------
+# TAB 4: ROTATION
+# ---------------------------------------------------------
+with tab4:
+    st.header(f"🔄 Multi-Week Rotation Matrix ({rotation_weeks}-Week Cycle)")
+    st.markdown("""
+    **Color-Coded Shift Legend:**
+    * 🔵 **Morning:** `07:00 - 15:30` | 🟢 **Day:** `08:30 - 17:00` | 🟠 **Evening:** `12:00 - 20:30` | 🟣 **Late Evening:** `13:30 - 22:00` | 🔷 **EoB Closing:** `14:00 - 22:00`
+    """)
+    
+    selected_week = st.selectbox("Select Week to View Daily Coverage (Mon - Sun):", [f"Week {w}" for w in range(1, rotation_weeks + 1)])
+    week_idx = int(selected_week.split(" ")[1])
+    
+    pt_half1_shift = "08:00 - 13:00 (Start 08:00)" if week_idx % 2 != 0 else "17:00 - 22:00 (EoB Close)"
+    pt_half2_shift = "17:00 - 22:00 (EoB Close)" if week_idx % 2 != 0 else "08:00 - 13:00 (Start 08:00)"
+    
+    rotation_schedule = {
+        "Cohort Group": [
+            "ChildU1 / ChildU2 (Restricted)",
+            "Minors (U18_PT_5 & U18_PT_4)",
+            "Part-Time Group 1 (50% Split)",
+            "Part-Time Group 2 (50% Split)",
+            "Flexible Full-Time Group A",
+            "Flexible Full-Time Group B"
+        ]
+    }
+    
+    for day in days_of_week:
+        if day in ["Saturday", "Sunday"]:
+            rotation_schedule[day] = [
+                "OFF", "OFF", 
+                "08:00 - 13:00" if week_idx % 2 != 0 else "OFF",
+                "OFF" if week_idx % 2 != 0 else "08:00 - 13:00",
+                "08:30 - 17:00" if week_idx % 2 == 0 else "OFF",
+                "OFF" if week_idx % 2 == 0 else "13:30 - 22:00"
+            ]
+        else:
+            rotation_schedule[day] = [
+                "🟢 Day (08:30-17:00)",
+                "🔵 Morning (<5h, off <20:00)",
+                pt_half1_shift,
+                pt_half2_shift,
+                "🔵 Morning (07:00-15:30)" if week_idx % 3 == 1 else ("🟢 Day (08:30-17:00)" if week_idx % 3 == 2 else "🟣 Late (13:30-22:00)"),
+                "🟣 Late (13:30-22:00)" if week_idx % 3 == 1 else ("🔵 Morning (07:00-15:30)" if week_idx % 3 == 2 else "🟢 Day (08:30-17:00)")
+            ]
+            
+    df_week_view = pd.DataFrame(rotation_schedule)
+    st.dataframe(df_week_view, use_container_width=True)
