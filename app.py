@@ -7,7 +7,7 @@ import math
 st.set_page_config(page_title="Ohara WFM - Swisscom Engine", layout="wide")
 
 st.title("🧙‍♂️ Ohara - Swisscom Strategic WFM Engine")
-st.markdown("Dynamic Calendar Matrix, Multi-Metric Controls & Strategic Shift Rotation")
+st.markdown("Dynamic Calendar Matrix, Multi-Metric Controls, Shift Rotation & NICE/WFM CSV Export")
 
 # ---------------------------------------------------------
 # SIDEBAR PARAMETERS & FILE UPLOADERS
@@ -155,7 +155,6 @@ if verteilung_file is not None:
                 else:
                     daily_curves[std_day] = base_curves_default[std_day] / base_curves_default[std_day].sum()
             file_parsed = True
-            st.sidebar.success("Successfully parsed distribution from file!")
     except Exception as e:
         st.sidebar.error(f"Error reading file: {e}")
 
@@ -166,7 +165,6 @@ if not file_parsed:
 weekday_abbr_map = {0: "Mo", 1: "Tu", 2: "We", 3: "Th", 4: "Fr", 5: "Sa", 6: "Su"}
 weekday_full_map = {0: "Monday", 1: "Tuesday", 2: "Wednesday", 3: "Thursday", 4: "Friday", 5: "Saturday", 6: "Sunday"}
 
-# Calculate total weight across all days in the extended date list
 total_period_weight = 0
 for dt in date_list:
     day_full = weekday_full_map[dt.weekday()]
@@ -223,10 +221,10 @@ tab1, tab2, tab3, tab4 = st.tabs([
 ])
 
 # ---------------------------------------------------------
-# TAB 1: MATRIX
+# TAB 1: MATRIX & EXPORT BUTTON
 # ---------------------------------------------------------
 with tab1:
-    st.header(f"🧮 Monthly Calendar Matrix — {selected_month_name} {year} (Extended to Full Final Week)")
+    st.header(f"🧮 Monthly Calendar Matrix — {selected_month_name} {year}")
     st.write("Vertical: 30-minute intervals (07:00 – 22:00) | Row 1: Calendar Date | Row 2: Weekday Abbreviation")
     
     metric_choice = st.radio(
@@ -243,6 +241,57 @@ with tab1:
         st.dataframe(df_matrix_net, use_container_width=True)
     else:
         st.dataframe(df_matrix_gross, use_container_width=True)
+
+    st.markdown("---")
+    st.subheader("📥 Export CSV for Swisscom (Account CT # 1427)")
+
+    col_exp1, col_exp2 = st.columns(2)
+    with col_exp1:
+        exporter_role = st.selectbox("Who is exporting?", ["Vali", "Colleague"])
+    with col_exp2:
+        if exporter_role == "Vali":
+            export_filename = "FC_NICE04A_102578321_Swissccom.csv"
+            st.info(f"Filename: `{export_filename}`")
+        else:
+            colleague_prefix = st.text_input("Enter Colleague File Prefix:", value="FC_NICE04A_Colleague")
+            export_filename = f"{colleague_prefix}_Swissccom.csv"
+
+    # Prepare export DataFrame matching screenshot schema
+    export_rows = []
+    for dt in date_list:
+        date_str = f"{dt.month}/{dt.day}/{dt.year}"
+        day_full = weekday_full_map[dt.weekday()]
+        curve = daily_curves[day_full]
+        day_factor = 1.2 if day_full == "Monday" else (0.7 if day_full in ["Saturday", "Sunday"] else 1.0)
+        daily_mins = (call_volume / total_period_weight) * day_factor
+        
+        for idx, interval in enumerate(intervals):
+            int_mins = daily_mins * curve[idx]
+            int_calls = int_mins / (aht / 60)
+            
+            # Convert 24h interval to 12-hr AM/PM format (e.g. 7:00 AM, 12:30 PM)
+            h, m = map(int, interval.split(":"))
+            t_obj = datetime.time(h, m)
+            t_12hr = t_obj.strftime("%I:%M %p").lstrip("0")
+            
+            export_rows.append({
+                "CT #": 1427,
+                "Date": date_str,
+                "Interval": t_12hr,
+                "Contacts Rec": round(int_calls, 6),
+                "AHT": int(aht)
+            })
+
+    df_export = pd.DataFrame(export_rows)
+    csv_bytes = df_export.to_csv(index=False).encode('utf-8')
+
+    st.download_button(
+        label="📥 Download Swisscom CSV Export",
+        data=csv_bytes,
+        file_name=export_filename,
+        mime="text/csv",
+        help="Download CSV file formatted for Swisscom WFM. Move downloaded file into your Desktop/FC Exports folder."
+    )
 
 # ---------------------------------------------------------
 # TAB 2: CHART
@@ -314,7 +363,7 @@ with tab4:
                 "08:00 - 13:00" if week_idx % 2 != 0 else "OFF",
                 "OFF" if week_idx % 2 != 0 else "08:00 - 13:00",
                 "08:30 - 17:00" if week_idx % 2 == 0 else "OFF",
-                "OFF" if week_idx % 2 == 0 else "13:30 - 22:00"
+                "OFF" if week_idx == 0 else "13:30 - 22:00"
             ]
         else:
             rotation_schedule[day] = [
