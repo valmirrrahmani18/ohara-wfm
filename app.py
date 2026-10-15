@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import datetime
 import math
 
 st.set_page_config(page_title="Ohara WFM - Swisscom Engine", layout="wide")
@@ -12,16 +13,26 @@ st.markdown("Dynamic Calendar Matrix, Multi-Metric Controls & Strategic Shift Ro
 # SIDEBAR PARAMETERS & FILE UPLOADERS
 # ---------------------------------------------------------
 st.sidebar.header("📅 Planning Period")
-selected_month = st.sidebar.selectbox("Select Planning Month", [
+selected_month_name = st.sidebar.selectbox("Select Planning Month", [
     "January", "February", "March", "April", "May", "June", 
     "July", "August", "September", "October", "November", "December"
-])
+], index=11) # Default to December
 
-month_days_map = {
-    "January": 31, "February": 28, "March": 31, "April": 30, "May": 31, "June": 30,
-    "July": 31, "August": 31, "September": 30, "October": 31, "November": 30, "December": 31
+month_num_map = {
+    "January": 1, "February": 2, "March": 3, "April": 4, "May": 5, "June": 6,
+    "July": 7, "August": 8, "September": 9, "October": 10, "November": 11, "December": 12
 }
-total_month_days = month_days_map[selected_month]
+
+month_num = month_num_map[selected_month_name]
+year = 2026
+
+# Determine days in selected month dynamically
+if month_num in [1, 3, 5, 7, 8, 10, 12]:
+    total_month_days = 31
+elif month_num in [4, 6, 9, 11]:
+    total_month_days = 30
+else:
+    total_month_days = 28
 
 st.sidebar.header("⚙️ Account Parameters")
 call_volume = st.sidebar.number_input("Monthly Call Volume (Minutes)", value=340000, step=10000)
@@ -46,7 +57,7 @@ raw_workload_hours = call_volume / 60
 gross_workload_hours = raw_workload_hours / (1 - (total_shrinkage / 100))
 required_fte = round(gross_workload_hours / 168, 2)
 
-st.subheader(f"📊 Executive Overview — {selected_month} ({total_month_days} Days)")
+st.subheader(f"📊 Executive Overview — {selected_month_name} {year} ({total_month_days} Days)")
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Total Monthly Calls", f"{int(total_calls_forecast):,}")
 col2.metric("Required Capacity", f"{required_fte} FTE")
@@ -82,22 +93,34 @@ daily_curves = {
     "Sunday": (weekend_base * 0.6) / (weekend_base * 0.6).sum()
 }
 
-days_of_week = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-month_total_weight = sum([daily_curves[days_of_week[(d - 1) % 7]].sum() for d in range(1, total_month_days + 1)])
+weekday_abbr_map = {0: "Mo", 1: "Tu", 2: "We", 3: "Th", 4: "Fr", 5: "Sa", 6: "Su"}
+weekday_full_map = {0: "Monday", 1: "Tuesday", 2: "Wednesday", 3: "Thursday", 4: "Friday", 5: "Saturday", 6: "Sunday"}
 
-# Data Dictionaries for Matrix
+# Calculate total month curve weight to normalize volume accurately
+month_total_weight = 0
+for day_num in range(1, total_month_days + 1):
+    dt = datetime.date(year, month_num, day_num)
+    day_full = weekday_full_map[dt.weekday()]
+    day_factor = 1.2 if day_full == "Monday" else (0.5 if day_full == "Saturday" else (0.3 if day_full == "Sunday" else 1.0))
+    month_total_weight += day_factor
+
+# Build DataFrames with MultiIndex Columns: Row 1 = Date ("01"), Row 2 = Weekday ("Tu")
 dict_mins = {interval: {} for interval in intervals}
 dict_calls = {interval: {} for interval in intervals}
 dict_net = {interval: {} for interval in intervals}
 dict_gross = {interval: {} for interval in intervals}
 
-for d in range(1, total_month_days + 1):
-    day_name = days_of_week[(d - 1) % 7]
-    col_label = f"Day {d} ({day_name[:3]})"
-    curve = daily_curves[day_name]
+for day_num in range(1, total_month_days + 1):
+    dt = datetime.date(year, month_num, day_num)
+    date_str = f"{day_num:02d}"
+    day_abbr = weekday_abbr_map[dt.weekday()]
+    day_full = weekday_full_map[dt.weekday()]
     
-    day_weight_factor = 1.2 if day_name == "Monday" else (0.5 if day_name == "Saturday" else (0.3 if day_name == "Sunday" else 1.0))
-    daily_mins = (call_volume / month_total_weight) * day_weight_factor
+    col_tuple = (date_str, day_abbr)
+    curve = daily_curves[day_full]
+    
+    day_factor = 1.2 if day_full == "Monday" else (0.5 if day_full == "Saturday" else (0.3 if day_full == "Sunday" else 1.0))
+    daily_mins = (call_volume / month_total_weight) * day_factor
     
     for idx, interval in enumerate(intervals):
         int_mins = daily_mins * curve[idx]
@@ -106,15 +129,22 @@ for d in range(1, total_month_days + 1):
         net_fte = math.ceil(erlang_val / 0.85) if erlang_val > 0 else 0
         gross_fte = math.ceil(net_fte / (1 - (total_shrinkage / 100))) if net_fte > 0 else 0
         
-        dict_mins[interval][col_label] = round(int_mins, 1)
-        dict_calls[interval][col_label] = round(int_calls, 1)
-        dict_net[interval][col_label] = net_fte
-        dict_gross[interval][col_label] = gross_fte
+        dict_mins[interval][col_tuple] = round(int_mins, 1)
+        dict_calls[interval][col_tuple] = round(int_calls, 1)
+        dict_net[interval][col_tuple] = net_fte
+        dict_gross[interval][col_tuple] = gross_fte
 
 df_matrix_mins = pd.DataFrame(dict_mins).T
 df_matrix_calls = pd.DataFrame(dict_calls).T
 df_matrix_net = pd.DataFrame(dict_net).T
 df_matrix_gross = pd.DataFrame(dict_gross).T
+
+# Structure MultiIndex for headers
+columns_multiindex = pd.MultiIndex.from_tuples(df_matrix_mins.columns, names=["Date", "Day"])
+df_matrix_mins.columns = columns_multiindex
+df_matrix_calls.columns = columns_multiindex
+df_matrix_net.columns = columns_multiindex
+df_matrix_gross.columns = columns_multiindex
 
 # ---------------------------------------------------------
 # TAB NAVIGATION
@@ -127,11 +157,11 @@ tab1, tab2, tab3, tab4 = st.tabs([
 ])
 
 # ---------------------------------------------------------
-# TAB 1: MATRIX WITH METRIC TOGGLE
+# TAB 1: MATRIX WITH DYNAMIC TWO-ROW HEADER & METRIC TOGGLE
 # ---------------------------------------------------------
 with tab1:
-    st.header(f"🧮 Monthly Calendar Matrix — {selected_month} ({total_month_days} Days)")
-    st.write("Vertical: 30-minute operational intervals (07:00 – 22:00) | Horizontal: Calendar days across the month")
+    st.header(f"🧮 Monthly Calendar Matrix — {selected_month_name} {year}")
+    st.write("Vertical: 30-minute intervals (07:00 – 22:00) | Row 1: Calendar Date | Row 2: Weekday Abbreviation")
     
     metric_choice = st.radio(
         "Select Display Metric:",
@@ -152,14 +182,15 @@ with tab1:
 # TAB 2: CHART
 # ---------------------------------------------------------
 with tab2:
-    st.header(f"📈 Daily Interval Workload Chart — {selected_month}")
-    selected_chart_day_idx = st.slider("Select Day of Month to Plot:", 1, total_month_days, 1)
-    day_name_plot = days_of_week[(selected_chart_day_idx - 1) % 7]
-    col_key = f"Day {selected_chart_day_idx} ({day_name_plot[:3]})"
+    st.header(f"📈 Daily Interval Workload Chart — {selected_month_name} {year}")
+    selected_chart_day_num = st.slider("Select Day of Month to Plot:", 1, total_month_days, 1)
+    
+    dt_chart = datetime.date(year, month_num, selected_chart_day_num)
+    col_tuple_chart = (f"{selected_chart_day_num:02d}", weekday_abbr_map[dt_chart.weekday()])
     
     df_chart_plot = pd.DataFrame({
-        "Gross Required FTE": df_matrix_gross[col_key],
-        "Net On-Queue FTE Target": df_matrix_net[col_key]
+        "Gross Required FTE": df_matrix_gross[col_tuple_chart],
+        "Net On-Queue FTE Target": df_matrix_net[col_tuple_chart]
     }, index=intervals)
     
     st.line_chart(df_chart_plot)
@@ -198,6 +229,7 @@ with tab4:
     pt_half1_shift = "08:00 - 13:00 (Start 08:00)" if week_idx % 2 != 0 else "17:00 - 22:00 (EoB Close)"
     pt_half2_shift = "17:00 - 22:00 (EoB Close)" if week_idx % 2 != 0 else "08:00 - 13:00 (Start 08:00)"
     
+    days_full = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     rotation_schedule = {
         "Cohort Group": [
             "ChildU1 / ChildU2 (Restricted)",
@@ -209,7 +241,7 @@ with tab4:
         ]
     }
     
-    for day in days_of_week:
+    for day in days_full:
         if day in ["Saturday", "Sunday"]:
             rotation_schedule[day] = [
                 "OFF", "OFF", 
