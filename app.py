@@ -66,11 +66,11 @@ col4.metric("Total Shrinkage", f"{round(total_shrinkage, 2)}%")
 st.markdown("---")
 
 # ---------------------------------------------------------
-# CALENDAR MATRIX COMPUTATION & FILE PARSING
+# SMART TIME-BUCKETING FILE PARSING (07:00 - 22:00 CET)
 # ---------------------------------------------------------
 intervals = [f"{h:02d}:{m:02d}" for h in range(7, 22) for m in (0, 30)]
+days_list = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
-# Distinct baseline shapes for every day of the week (07:00 to 22:00 = 30 intervals)
 base_curves_default = {
     "Monday": np.array([0.01, 0.02, 0.035, 0.05, 0.07, 0.09, 0.10, 0.11, 0.10, 0.09, 0.08, 0.07, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 0.035, 0.03, 0.025, 0.02, 0.015, 0.012, 0.01, 0.008, 0.006, 0.004, 0.002, 0.001]),
     "Tuesday": np.array([0.012, 0.022, 0.04, 0.055, 0.075, 0.085, 0.09, 0.095, 0.09, 0.085, 0.08, 0.075, 0.07, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 0.035, 0.03, 0.025, 0.02, 0.015, 0.012, 0.01, 0.007, 0.005, 0.003, 0.001]),
@@ -82,17 +82,8 @@ base_curves_default = {
 }
 
 daily_curves = {}
-days_mapping = {
-    "Monday": ["monday", "montag", "mon"],
-    "Tuesday": ["tuesday", "dienstag", "tue"],
-    "Wednesday": ["wednesday", "mittwoch", "wed"],
-    "Thursday": ["thursday", "donnerstag", "thu"],
-    "Friday": ["friday", "freitag", "fri"],
-    "Saturday": ["saturday", "samstag", "sat"],
-    "Sunday": ["sunday", "sonntag", "sun"]
-}
-
 file_parsed = False
+
 if verteilung_file is not None:
     try:
         if verteilung_file.name.endswith(".csv"):
@@ -100,41 +91,74 @@ if verteilung_file is not None:
         else:
             df_hist = pd.read_excel(verteilung_file)
         
-        df_hist.columns = [str(c).strip().lower() for c in df_hist.columns]
+        col_map = {str(c).strip().lower(): c for c in df_hist.columns}
         
-        for std_day, aliases in days_mapping.items():
-            matched_col = None
-            for alias in aliases:
-                for col in df_hist.columns:
-                    if alias in col:
-                        matched_col = col
-                        break
-                if matched_col:
-                    break
+        time_col = next((col_map[c] for c in col_map if 'intervall' in c or 'time' in c or 'start' in c), None)
+        day_col = next((col_map[c] for c in col_map if 'day' in c or 'woche' in c or 'tag' in c), None)
+        vq_col = next((col_map[c] for c in col_map if 'vq' in c or 'entered' in c or 'volume' in c or 'calls' in c), None)
+        
+        if time_col and day_col and vq_col:
+            day_translation = {
+                'monday': 'Monday', 'montag': 'Monday', 'mon': 'Monday', '1': 'Monday',
+                'tuesday': 'Tuesday', 'dienstag': 'Tuesday', 'tue': 'Tuesday', '2': 'Tuesday',
+                'wednesday': 'Wednesday', 'mittwoch': 'Wednesday', 'wed': 'Wednesday', '3': 'Wednesday',
+                'thursday': 'Thursday', 'donnerstag': 'Thursday', 'thu': 'Thursday', '4': 'Thursday',
+                'friday': 'Friday', 'freitag': 'Friday', 'fri': 'Friday', '5': 'Friday',
+                'saturday': 'Saturday', 'samstag': 'Saturday', 'sat': 'Saturday', '6': 'Saturday',
+                'sunday': 'Sunday', 'sonntag': 'Sunday', 'sun': 'Sunday', '7': 'Sunday'
+            }
             
-            if matched_col:
-                vals = pd.to_numeric(df_hist[matched_col], errors='coerce').fillna(0).values[:len(intervals)]
-                if len(vals) == len(intervals) and vals.sum() > 0:
-                    daily_curves[std_day] = vals / vals.sum()
-                    file_parsed = True
+            df_hist['standard_day'] = df_hist[day_col].astype(str).str.strip().str.lower().map(day_translation)
+            
+            # Helper function to convert time strings (like 07:15, 07:45) into standard 30-min interval buckets (07:00, 07:30)
+            def time_to_bucket(t_val):
+                try:
+                    t_str = str(t_val).strip()
+                    parts = t_str.split(':')
+                    h = int(parts[0])
+                    m = int(parts[1]) if len(parts) > 1 else 0
+                    total_mins = h * 60 + m
+                    bucket_mins = (total_mins // 30) * 30
+                    bh = bucket_mins // 60
+                    bm = bucket_mins % 60
+                    return f"{bh:02d}:{bm:02d}"
+                except:
+                    return None
+
+            df_hist['bucket_interval'] = df_hist[time_col].apply(time_to_bucket)
+            df_hist['numeric_vq'] = pd.to_numeric(df_hist[vq_col], errors='coerce').fillna(0)
+            
+            for std_day in days_list:
+                sub_df = df_hist[df_hist['standard_day'] == std_day]
+                if not sub_df.empty:
+                    # Aggregate 15-min or granular intervals into 30-min buckets using sum()
+                    grouped = sub_df.groupby('bucket_interval')['numeric_vq'].sum().to_dict()
+                    
+                    curve_vals = []
+                    for interval in intervals:
+                        curve_vals.append(grouped.get(interval, 0.0))
+                    
+                    arr = np.array(curve_vals)
+                    if arr.sum() > 0:
+                        daily_curves[std_day] = arr / arr.sum()
+                    else:
+                        daily_curves[std_day] = base_curves_default[std_day] / base_curves_default[std_day].sum()
                 else:
                     daily_curves[std_day] = base_curves_default[std_day] / base_curves_default[std_day].sum()
-            else:
-                daily_curves[std_day] = base_curves_default[std_day] / base_curves_default[std_day].sum()
-                
-        if file_parsed:
-            st.sidebar.success("Successfully parsed day-specific distributions from file!")
+            file_parsed = True
+            st.sidebar.success("Successfully parsed & bucketeled intervals (e.g. 07:15 -> 07:00)! 🤗")
+        else:
+            st.sidebar.warning("Required columns not found. Using default curves.")
     except Exception as e:
         st.sidebar.error(f"Error reading file: {e}")
 
 if not file_parsed:
-    for day in days_mapping.keys():
+    for day in days_list:
         daily_curves[day] = base_curves_default[day] / base_curves_default[day].sum()
 
 weekday_abbr_map = {0: "Mo", 1: "Tu", 2: "We", 3: "Th", 4: "Fr", 5: "Sa", 6: "Su"}
 weekday_full_map = {0: "Monday", 1: "Tuesday", 2: "Wednesday", 3: "Thursday", 4: "Friday", 5: "Saturday", 6: "Sunday"}
 
-# Calculate total month curve weight to normalize volume accurately across all days
 month_total_weight = 0
 for day_num in range(1, total_month_days + 1):
     dt = datetime.date(year, month_num, day_num)
@@ -193,7 +217,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
 ])
 
 # ---------------------------------------------------------
-# TAB 1: MATRIX WITH DYNAMIC TWO-ROW HEADER & METRIC TOGGLE
+# TAB 1: MATRIX
 # ---------------------------------------------------------
 with tab1:
     st.header(f"🧮 Monthly Calendar Matrix — {selected_month_name} {year}")
