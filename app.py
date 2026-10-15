@@ -17,6 +17,8 @@ selected_month = st.sidebar.selectbox("Select Planning Month", [
     "July", "August", "September", "October", "November", "December"
 ])
 
+working_days = st.sidebar.number_input("Working Days in Selected Month", value=22, min_value=1, max_value=31)
+
 st.sidebar.header("⚙️ Account Parameters")
 call_volume = st.sidebar.number_input("Monthly Call Volume (Minutes)", value=340000, step=10000)
 aht = st.sidebar.number_input("Average Handle Time (Seconds)", value=600, step=10)
@@ -34,17 +36,17 @@ st.sidebar.header("📁 Data Sources")
 verteilung_file = st.sidebar.file_uploader("Upload 'Copy of Swisscom - Call verteilung 2' (.xlsx/.csv)", type=["xlsx", "csv"], key="verteilung")
 verfuegbarkeit_file = st.sidebar.file_uploader("Upload Verfügbarkeitsliste (.xlsx/.csv)", type=["xlsx", "csv"], key="verfuegbarkeit")
 
-# Dynamic Calculations
+# Dynamic Overall Monthly Calculations
 total_calls_forecast = call_volume / (aht / 60)
 raw_workload_hours = call_volume / 60
 gross_workload_hours = raw_workload_hours / (1 - (total_shrinkage / 100))
 required_fte = round(gross_workload_hours / 168, 2)
 
 # Top Metrics Bar
-st.subheader(f"📊 Executive Overview — {selected_month} Planning Cycle")
+st.subheader(f"📊 Executive Overview — {selected_month} Planning Cycle ({working_days} Working Days)")
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Total Monthly Calls", f"{int(total_calls_forecast):,}")
-col2.metric("Required Capacity", f"{required_fte} FTE")
+col2.metric("Required Roster Capacity", f"{required_fte} FTE")
 col3.metric("Target SL", f"{target_sl}% in {target_time}s")
 col4.metric("Total Shrinkage", f"{round(total_shrinkage, 2)}%")
 
@@ -55,12 +57,14 @@ st.markdown("---")
 # ---------------------------------------------------------
 intervals = [f"{h:02d}:{m:02d}" for h in range(7, 22) for m in (0, 30)]
 
-# Determine distribution weights from uploaded historical file or default curve
+# Standard bell curve distribution weights (sum = 1.0)
 default_curve = np.array([
     0.01, 0.02, 0.035, 0.05, 0.07, 0.085, 0.095, 0.10, 0.095, 0.09, 
     0.085, 0.08, 0.075, 0.07, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 
     0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.008, 0.005, 0.002, 0.001
 ])
+
+distribution_pct = default_curve / default_curve.sum()
 
 if verteilung_file is not None:
     try:
@@ -69,23 +73,20 @@ if verteilung_file is not None:
         else:
             df_hist = pd.read_excel(verteilung_file)
         
-        # Look for numeric distribution column
         numeric_cols = df_hist.select_dtypes(include=[np.number]).columns
         if len(numeric_cols) > 0:
-            raw_weights = df_hist[numeric_cols[0]].values[:len(intervals)]
-            if len(raw_weights) == len(intervals):
-                distribution_weights = raw_weights / raw_weights.sum()
-            else:
-                distribution_weights = default_curve / default_curve.sum()
-        else:
-            distribution_weights = default_curve / default_curve.sum()
-    except Exception:
-        distribution_weights = default_curve / default_curve.sum()
-else:
-    distribution_weights = default_curve / default_curve.sum()
+            raw_vals = df_hist[numeric_cols[0]].values[:len(intervals)]
+            if len(raw_vals) == len(intervals) and raw_vals.sum() > 0:
+                distribution_pct = raw_vals / raw_vals.sum()
+                st.sidebar.success("Loaded & normalized Call Verteilung file!")
+    except Exception as e:
+        st.sidebar.error(f"Using default curve (Error reading file: {e})")
 
-# Distribute Monthly Call Volume across intervals using historical weights
-interval_minutes = call_volume * distribution_weights
+# Daily Average Volume Calculation
+daily_volume_mins = call_volume / working_days
+
+# Interval Workload Calculation using Normalized Percentages
+interval_minutes = daily_volume_mins * distribution_pct
 interval_calls = interval_minutes / (aht / 60)
 
 # Erlang-C Net & Gross FTE Calculation per interval
@@ -97,16 +98,49 @@ gross_fte_req = [math.ceil(n / (1 - (total_shrinkage / 100))) if n > 0 else 0 fo
 # TAB NAVIGATION
 # ---------------------------------------------------------
 tab1, tab2, tab3, tab4 = st.tabs([
-    "📋 Verfügbarkeitsliste & Priority Auto-Mapping",
+    "🧮 Interval Distribution & Volume Breakdown",
     "📈 Forecast vs. Planned Capacity Chart",
-    "🔄 Dynamic Shift Rotation (Mon-Sun)",
-    "🧮 Interval Distribution & Volume Breakdown"
+    "📋 Verfügbarkeitsliste & Priority Auto-Mapping",
+    "🔄 Dynamic Shift Rotation (Mon-Sun)"
 ])
 
 # ---------------------------------------------------------
-# TAB 1: VERFÜGBARKEITSLISTE & AUTO-MAPPING
+# TAB 1: CORRECTED INTERVAL BREAKDOWN TABLE
 # ---------------------------------------------------------
 with tab1:
+    st.header(f"🧮 Daily Interval Volume & Staffing Breakdown ({selected_month})")
+    st.write(f"Showing average daily distribution for **{daily_volume_mins:,.1f} minutes/day** ({call_volume:,} monthly minutes ÷ {working_days} working days):")
+    
+    df_intervals = pd.DataFrame({
+        "Interval Window": intervals,
+        "Interval % Weight": [f"{p*100:.2f}%" for p in distribution_pct],
+        "Distributed Calls": np.round(interval_calls, 1),
+        "Workload Minutes": np.round(interval_minutes, 1),
+        "Erlangs": np.round(erlangs, 2),
+        "Net Required FTE": net_fte_req,
+        "Gross Required FTE": gross_fte_req
+    })
+    
+    st.dataframe(df_intervals, use_container_width=True)
+
+# ---------------------------------------------------------
+# TAB 2: CHART & DYNAMIC RE-CALCULATION
+# ---------------------------------------------------------
+with tab2:
+    st.header(f"📈 Daily Interval Workload vs. Staffing Target ({selected_month})")
+    st.write("Dynamic re-calculation across all 30-minute operational intervals (07:00 to 22:00 CET):")
+    
+    df_chart = pd.DataFrame({
+        "Gross Required FTE": gross_fte_req,
+        "Net On-Queue FTE Target": net_fte_req
+    }, index=intervals)
+    
+    st.line_chart(df_chart)
+
+# ---------------------------------------------------------
+# TAB 3: VERFÜGBARKEITSLISTE & AUTO-MAPPING
+# ---------------------------------------------------------
+with tab3:
     st.header("📋 Verfügbarkeitsliste & Priority Constraint Auto-Mapping")
     st.write(f"Active Roster Mapping for **{selected_month}**:")
     
@@ -165,23 +199,9 @@ with tab1:
         st.dataframe(df_roster_mapped, use_container_width=True)
 
 # ---------------------------------------------------------
-# TAB 2: CHART & DYNAMIC RE-CALCULATION
+# TAB 4: MULTI-WEEK ROTATION (MON-SUN & 50/50 PT SPLIT)
 # ---------------------------------------------------------
-with tab2:
-    st.header(f"📈 Interval Workload vs. Planned Staffing Capacity ({selected_month})")
-    st.write("Dynamic re-calculation across all 30-minute operational intervals (07:00 to 22:00 CET):")
-    
-    df_chart = pd.DataFrame({
-        "Gross Required FTE": gross_fte_req,
-        "Net On-Queue FTE Target": net_fte_req
-    }, index=intervals)
-    
-    st.line_chart(df_chart)
-
-# ---------------------------------------------------------
-# TAB 3: MULTI-WEEK ROTATION (MON-SUN & 50/50 PT SPLIT)
-# ---------------------------------------------------------
-with tab3:
+with tab4:
     st.header(f"🔄 Multi-Week Rotation Matrix ({rotation_weeks}-Week Cycle)")
     st.markdown("""
     **Color-Coded Shift Legend:**
@@ -228,20 +248,3 @@ with tab3:
             
     df_week_view = pd.DataFrame(rotation_schedule)
     st.dataframe(df_week_view, use_container_width=True)
-
-# ---------------------------------------------------------
-# TAB 4: INTERVAL BREAKDOWN TABLE
-# ---------------------------------------------------------
-with tab4:
-    st.header(f"🧮 Interval Volume & Staffing Breakdown ({selected_month})")
-    
-    df_intervals = pd.DataFrame({
-        "Interval Window": intervals,
-        "Distributed Calls": np.round(interval_calls, 1),
-        "Workload Minutes": np.round(interval_minutes, 1),
-        "Erlangs": np.round(erlangs, 2),
-        "Net Required FTE": net_fte_req,
-        "Gross Required FTE": gross_fte_req
-    })
-    
-    st.dataframe(df_intervals, use_container_width=True)
