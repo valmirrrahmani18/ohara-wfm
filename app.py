@@ -26,13 +26,6 @@ month_num_map = {
 month_num = month_num_map[selected_month_name]
 year = 2026
 
-if month_num in [1, 3, 5, 7, 8, 10, 12]:
-    total_month_days = 31
-elif month_num in [4, 6, 9, 11]:
-    total_month_days = 30
-else:
-    total_month_days = 28
-
 st.sidebar.header("⚙️ Account Parameters")
 call_volume = st.sidebar.number_input("Monthly Call Volume (Minutes)", value=340000, step=10000)
 aht = st.sidebar.number_input("Average Handle Time (Seconds)", value=600, step=10)
@@ -56,7 +49,7 @@ raw_workload_hours = call_volume / 60
 gross_workload_hours = raw_workload_hours / (1 - (total_shrinkage / 100))
 required_fte = round(gross_workload_hours / 168, 2)
 
-st.subheader(f"📊 Executive Overview — {selected_month_name} {year} ({total_month_days} Days)")
+st.subheader(f"📊 Executive Overview — {selected_month_name} {year}")
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Total Monthly Calls", f"{int(total_calls_forecast):,}")
 col2.metric("Required Capacity", f"{required_fte} FTE")
@@ -64,6 +57,28 @@ col3.metric("Target SL", f"{target_sl}% in {target_time}s")
 col4.metric("Total Shrinkage", f"{round(total_shrinkage, 2)}%")
 
 st.markdown("---")
+
+# ---------------------------------------------------------
+# EXTENDED CALENDAR RANGE (1st of Month to Final Sunday)
+# ---------------------------------------------------------
+start_date = datetime.date(year, month_num, 1)
+
+if month_num in [1, 3, 5, 7, 8, 10, 12]:
+    last_day_num = 31
+elif month_num in [4, 6, 9, 11]:
+    last_day_num = 30
+else:
+    last_day_num = 28
+
+end_of_month_date = datetime.date(year, month_num, last_day_num)
+days_to_sunday = (6 - end_of_month_date.weekday()) % 7
+end_date = end_of_month_date + datetime.timedelta(days=days_to_sunday)
+
+date_list = []
+curr = start_date
+while curr <= end_date:
+    date_list.append(curr)
+    curr += datetime.timedelta(days=1)
 
 # ---------------------------------------------------------
 # SMART TIME-BUCKETING FILE PARSING (07:00 - 22:00 CET)
@@ -110,7 +125,6 @@ if verteilung_file is not None:
             
             df_hist['standard_day'] = df_hist[day_col].astype(str).str.strip().str.lower().map(day_translation)
             
-            # Helper function to convert time strings (like 07:15, 07:45) into standard 30-min interval buckets (07:00, 07:30)
             def time_to_bucket(t_val):
                 try:
                     t_str = str(t_val).strip()
@@ -131,13 +145,8 @@ if verteilung_file is not None:
             for std_day in days_list:
                 sub_df = df_hist[df_hist['standard_day'] == std_day]
                 if not sub_df.empty:
-                    # Aggregate 15-min or granular intervals into 30-min buckets using sum()
                     grouped = sub_df.groupby('bucket_interval')['numeric_vq'].sum().to_dict()
-                    
-                    curve_vals = []
-                    for interval in intervals:
-                        curve_vals.append(grouped.get(interval, 0.0))
-                    
+                    curve_vals = [grouped.get(interval, 0.0) for interval in intervals]
                     arr = np.array(curve_vals)
                     if arr.sum() > 0:
                         daily_curves[std_day] = arr / arr.sum()
@@ -146,9 +155,7 @@ if verteilung_file is not None:
                 else:
                     daily_curves[std_day] = base_curves_default[std_day] / base_curves_default[std_day].sum()
             file_parsed = True
-            st.sidebar.success("Successfully parsed & bucketeled intervals (e.g. 07:15 -> 07:00)! 🤗")
-        else:
-            st.sidebar.warning("Required columns not found. Using default curves.")
+            st.sidebar.success("Successfully parsed distribution from file!")
     except Exception as e:
         st.sidebar.error(f"Error reading file: {e}")
 
@@ -159,21 +166,20 @@ if not file_parsed:
 weekday_abbr_map = {0: "Mo", 1: "Tu", 2: "We", 3: "Th", 4: "Fr", 5: "Sa", 6: "Su"}
 weekday_full_map = {0: "Monday", 1: "Tuesday", 2: "Wednesday", 3: "Thursday", 4: "Friday", 5: "Saturday", 6: "Sunday"}
 
-month_total_weight = 0
-for day_num in range(1, total_month_days + 1):
-    dt = datetime.date(year, month_num, day_num)
+# Calculate total weight across all days in the extended date list
+total_period_weight = 0
+for dt in date_list:
     day_full = weekday_full_map[dt.weekday()]
     day_factor = 1.2 if day_full == "Monday" else (0.7 if day_full in ["Saturday", "Sunday"] else 1.0)
-    month_total_weight += day_factor
+    total_period_weight += day_factor
 
 dict_mins = {interval: {} for interval in intervals}
 dict_calls = {interval: {} for interval in intervals}
 dict_net = {interval: {} for interval in intervals}
 dict_gross = {interval: {} for interval in intervals}
 
-for day_num in range(1, total_month_days + 1):
-    dt = datetime.date(year, month_num, day_num)
-    date_str = f"{day_num:02d}"
+for dt in date_list:
+    date_str = f"{dt.day:02d}"
     day_abbr = weekday_abbr_map[dt.weekday()]
     day_full = weekday_full_map[dt.weekday()]
     
@@ -181,7 +187,7 @@ for day_num in range(1, total_month_days + 1):
     curve = daily_curves[day_full]
     
     day_factor = 1.2 if day_full == "Monday" else (0.7 if day_full in ["Saturday", "Sunday"] else 1.0)
-    daily_mins = (call_volume / month_total_weight) * day_factor
+    daily_mins = (call_volume / total_period_weight) * day_factor
     
     for idx, interval in enumerate(intervals):
         int_mins = daily_mins * curve[idx]
@@ -220,7 +226,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
 # TAB 1: MATRIX
 # ---------------------------------------------------------
 with tab1:
-    st.header(f"🧮 Monthly Calendar Matrix — {selected_month_name} {year}")
+    st.header(f"🧮 Monthly Calendar Matrix — {selected_month_name} {year} (Extended to Full Final Week)")
     st.write("Vertical: 30-minute intervals (07:00 – 22:00) | Row 1: Calendar Date | Row 2: Weekday Abbreviation")
     
     metric_choice = st.radio(
@@ -243,10 +249,10 @@ with tab1:
 # ---------------------------------------------------------
 with tab2:
     st.header(f"📈 Daily Interval Workload Chart — {selected_month_name} {year}")
-    selected_chart_day_num = st.slider("Select Day of Month to Plot:", 1, total_month_days, 1)
+    selected_chart_idx = st.slider("Select Day to Plot:", 1, len(date_list), 1)
     
-    dt_chart = datetime.date(year, month_num, selected_chart_day_num)
-    col_tuple_chart = (f"{selected_chart_day_num:02d}", weekday_abbr_map[dt_chart.weekday()])
+    dt_chart = date_list[selected_chart_idx - 1]
+    col_tuple_chart = (f"{dt_chart.day:02d}", weekday_abbr_map[dt_chart.weekday()])
     
     df_chart_plot = pd.DataFrame({
         "Gross Required FTE": df_matrix_gross[col_tuple_chart],
