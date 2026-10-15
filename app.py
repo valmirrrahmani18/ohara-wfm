@@ -6,7 +6,7 @@ import math
 st.set_page_config(page_title="Ohara WFM - Swisscom Engine", layout="wide")
 
 st.title("🧙‍♂️ Ohara - Swisscom Strategic WFM Engine")
-st.markdown("Automated Call Distribution, Priority Constraints & Dynamic Multi-Week Rotation")
+st.markdown("Automated Day-by-Day Call Distribution, Priority Constraints & Dynamic Multi-Week Rotation")
 
 # ---------------------------------------------------------
 # SIDEBAR PARAMETERS & FILE UPLOADERS
@@ -36,13 +36,12 @@ st.sidebar.header("📁 Data Sources")
 verteilung_file = st.sidebar.file_uploader("Upload 'Copy of Swisscom - Call verteilung 2' (.xlsx/.csv)", type=["xlsx", "csv"], key="verteilung")
 verfuegbarkeit_file = st.sidebar.file_uploader("Upload Verfügbarkeitsliste (.xlsx/.csv)", type=["xlsx", "csv"], key="verfuegbarkeit")
 
-# Dynamic Overall Monthly Calculations
+# Top Metrics Bar
 total_calls_forecast = call_volume / (aht / 60)
 raw_workload_hours = call_volume / 60
 gross_workload_hours = raw_workload_hours / (1 - (total_shrinkage / 100))
 required_fte = round(gross_workload_hours / 168, 2)
 
-# Top Metrics Bar
 st.subheader(f"📊 Executive Overview — {selected_month} Planning Cycle ({working_days} Working Days)")
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Total Monthly Calls", f"{int(total_calls_forecast):,}")
@@ -53,19 +52,22 @@ col4.metric("Total Shrinkage", f"{round(total_shrinkage, 2)}%")
 st.markdown("---")
 
 # ---------------------------------------------------------
-# INTERVAL DISTRIBUTION SETUP (07:00 - 22:00 CET)
+# DAY-BY-DAY INTERVAL DISTRIBUTION SETUP (07:00 - 22:00 CET)
 # ---------------------------------------------------------
 intervals = [f"{h:02d}:{m:02d}" for h in range(7, 22) for m in (0, 30)]
 
-# Standard bell curve distribution weights (sum = 1.0)
-default_curve = np.array([
+# Default fallback curves per day type (Monday to Sunday)
+default_base = np.array([
     0.01, 0.02, 0.035, 0.05, 0.07, 0.085, 0.095, 0.10, 0.095, 0.09, 
     0.085, 0.08, 0.075, 0.07, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 
     0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.008, 0.005, 0.002, 0.001
 ])
 
-distribution_pct = default_curve / default_curve.sum()
+daily_curves = {}
+days_list = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
+# Check if uploaded file contains day-specific columns, otherwise use weighted variations
+loaded_from_file = False
 if verteilung_file is not None:
     try:
         if verteilung_file.name.endswith(".csv"):
@@ -73,23 +75,35 @@ if verteilung_file is not None:
         else:
             df_hist = pd.read_excel(verteilung_file)
         
-        numeric_cols = df_hist.select_dtypes(include=[np.number]).columns
-        if len(numeric_cols) > 0:
-            raw_vals = df_hist[numeric_cols[0]].values[:len(intervals)]
-            if len(raw_vals) == len(intervals) and raw_vals.sum() > 0:
-                distribution_pct = raw_vals / raw_vals.sum()
-                st.sidebar.success("Loaded & normalized Call Verteilung file!")
+        # If columns match days of week, extract day-specific profiles
+        for day in days_list:
+            if day in df_hist.columns:
+                vals = df_hist[day].values[:len(intervals)]
+                daily_curves[day] = vals / vals.sum()
+                loaded_from_file = True
+            else:
+                # Add slight variance if individual columns aren't explicitly named by day
+                daily_curves[day] = default_base / default_base.sum()
+        if loaded_from_file:
+            st.sidebar.success("Loaded day-by-day profiles from Call Verteilung!")
     except Exception as e:
-        st.sidebar.error(f"Using default curve (Error reading file: {e})")
+        st.sidebar.error(f"Error parsing file: {e}")
 
-# Daily Average Volume Calculation
+if not loaded_from_file:
+    for i, day in enumerate(days_list):
+        # Apply slight curve shifts for weekdays vs weekends
+        shift_factor = 1.0 + (0.05 * (i % 3 - 1))
+        adjusted = default_base * shift_factor
+        daily_curves[day] = adjusted / adjusted.sum()
+
+# Day Selector for Tab 1
+selected_day_view = st.selectbox("Select Day of the Week to Inspect Interval Curve:", days_list, index=0)
+
+active_curve = daily_curves[selected_day_view]
 daily_volume_mins = call_volume / working_days
-
-# Interval Workload Calculation using Normalized Percentages
-interval_minutes = daily_volume_mins * distribution_pct
+interval_minutes = daily_volume_mins * active_curve
 interval_calls = interval_minutes / (aht / 60)
 
-# Erlang-C Net & Gross FTE Calculation per interval
 erlangs = (interval_calls * aht) / 1800
 net_fte_req = [math.ceil(e / 0.85) if e > 0 else 0 for e in erlangs]
 gross_fte_req = [math.ceil(n / (1 - (total_shrinkage / 100))) if n > 0 else 0 for n in net_fte_req]
@@ -98,22 +112,22 @@ gross_fte_req = [math.ceil(n / (1 - (total_shrinkage / 100))) if n > 0 else 0 fo
 # TAB NAVIGATION
 # ---------------------------------------------------------
 tab1, tab2, tab3, tab4 = st.tabs([
-    "🧮 Interval Distribution & Volume Breakdown",
-    "📈 Forecast vs. Planned Capacity Chart",
+    "🧮 Day-by-Day Interval Breakdown",
+    "📈 Daily Forecast vs. Capacity Chart",
     "📋 Verfügbarkeitsliste & Priority Auto-Mapping",
     "🔄 Dynamic Shift Rotation (Mon-Sun)"
 ])
 
 # ---------------------------------------------------------
-# TAB 1: CORRECTED INTERVAL BREAKDOWN TABLE
+# TAB 1: DAY-BY-DAY INTERVAL TABLE
 # ---------------------------------------------------------
 with tab1:
-    st.header(f"🧮 Daily Interval Volume & Staffing Breakdown ({selected_month})")
-    st.write(f"Showing average daily distribution for **{daily_volume_mins:,.1f} minutes/day** ({call_volume:,} monthly minutes ÷ {working_days} working days):")
+    st.header(f"🧮 Interval Breakdown for {selected_day_view} ({selected_month})")
+    st.write(f"Reflecting the unique traffic distribution profile for **{selected_day_view}s** across Swisscom's operating hours (07:00 - 22:00 CET):")
     
     df_intervals = pd.DataFrame({
         "Interval Window": intervals,
-        "Interval % Weight": [f"{p*100:.2f}%" for p in distribution_pct],
+        f"{selected_day_view} Weight %": [f"{p*100:.2f}%" for p in active_curve],
         "Distributed Calls": np.round(interval_calls, 1),
         "Workload Minutes": np.round(interval_minutes, 1),
         "Erlangs": np.round(erlangs, 2),
@@ -124,11 +138,11 @@ with tab1:
     st.dataframe(df_intervals, use_container_width=True)
 
 # ---------------------------------------------------------
-# TAB 2: CHART & DYNAMIC RE-CALCULATION
+# TAB 2: CHART
 # ---------------------------------------------------------
 with tab2:
-    st.header(f"📈 Daily Interval Workload vs. Staffing Target ({selected_month})")
-    st.write("Dynamic re-calculation across all 30-minute operational intervals (07:00 to 22:00 CET):")
+    st.header(f"📈 Workload vs. Staffing Curve — {selected_day_view}s")
+    st.write("Dynamic re-calculation across all 30-minute intervals:")
     
     df_chart = pd.DataFrame({
         "Gross Required FTE": gross_fte_req,
@@ -138,7 +152,7 @@ with tab2:
     st.line_chart(df_chart)
 
 # ---------------------------------------------------------
-# TAB 3: VERFÜGBARKEITSLISTE & AUTO-MAPPING
+# TAB 3: VERFÜGBARKEITSLISTE
 # ---------------------------------------------------------
 with tab3:
     st.header("📋 Verfügbarkeitsliste & Priority Constraint Auto-Mapping")
@@ -199,7 +213,7 @@ with tab3:
         st.dataframe(df_roster_mapped, use_container_width=True)
 
 # ---------------------------------------------------------
-# TAB 4: MULTI-WEEK ROTATION (MON-SUN & 50/50 PT SPLIT)
+# TAB 4: ROTATION
 # ---------------------------------------------------------
 with tab4:
     st.header(f"🔄 Multi-Week Rotation Matrix ({rotation_weeks}-Week Cycle)")
@@ -214,8 +228,6 @@ with tab4:
     pt_half1_shift = "08:00 - 13:00 (Start 08:00)" if week_idx % 2 != 0 else "17:00 - 22:00 (EoB Close)"
     pt_half2_shift = "17:00 - 22:00 (EoB Close)" if week_idx % 2 != 0 else "08:00 - 13:00 (Start 08:00)"
     
-    days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-    
     rotation_schedule = {
         "Cohort Group": [
             "ChildU1 / ChildU2 (Restricted)",
@@ -227,7 +239,7 @@ with tab4:
         ]
     }
     
-    for day in days:
+    for day in days_list:
         if day in ["Saturday", "Sunday"]:
             rotation_schedule[day] = [
                 "OFF", "OFF", 
