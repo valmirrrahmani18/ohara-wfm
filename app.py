@@ -11,6 +11,12 @@ st.markdown("Automated Call Distribution, Priority Constraints & Dynamic Multi-W
 # ---------------------------------------------------------
 # SIDEBAR PARAMETERS & FILE UPLOADERS
 # ---------------------------------------------------------
+st.sidebar.header("📅 Planning Period")
+selected_month = st.sidebar.selectbox("Select Planning Month", [
+    "January", "February", "March", "April", "May", "June", 
+    "July", "August", "September", "October", "November", "December"
+])
+
 st.sidebar.header("⚙️ Account Parameters")
 call_volume = st.sidebar.number_input("Monthly Call Volume (Minutes)", value=340000, step=10000)
 aht = st.sidebar.number_input("Average Handle Time (Seconds)", value=600, step=10)
@@ -25,7 +31,7 @@ st.sidebar.header("🔄 Rotation Cycle")
 rotation_weeks = st.sidebar.slider("Rotation Cycle Length (Weeks)", 2, 10, 10)
 
 st.sidebar.header("📁 Data Sources")
-verteilung_file = st.sidebar.file_uploader("Upload Call Verteilung File (.xlsx/.csv)", type=["xlsx", "csv"], key="verteilung")
+verteilung_file = st.sidebar.file_uploader("Upload 'Copy of Swisscom - Call verteilung 2' (.xlsx/.csv)", type=["xlsx", "csv"], key="verteilung")
 verfuegbarkeit_file = st.sidebar.file_uploader("Upload Verfügbarkeitsliste (.xlsx/.csv)", type=["xlsx", "csv"], key="verfuegbarkeit")
 
 # Dynamic Calculations
@@ -35,7 +41,7 @@ gross_workload_hours = raw_workload_hours / (1 - (total_shrinkage / 100))
 required_fte = round(gross_workload_hours / 168, 2)
 
 # Top Metrics Bar
-st.subheader("📊 Dynamic Executive Overview")
+st.subheader(f"📊 Executive Overview — {selected_month} Planning Cycle")
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Total Monthly Calls", f"{int(total_calls_forecast):,}")
 col2.metric("Required Capacity", f"{required_fte} FTE")
@@ -49,14 +55,37 @@ st.markdown("---")
 # ---------------------------------------------------------
 intervals = [f"{h:02d}:{m:02d}" for h in range(7, 22) for m in (0, 30)]
 
-base_curve = np.array([
+# Determine distribution weights from uploaded historical file or default curve
+default_curve = np.array([
     0.01, 0.02, 0.035, 0.05, 0.07, 0.085, 0.095, 0.10, 0.095, 0.09, 
     0.085, 0.08, 0.075, 0.07, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 
     0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.008, 0.005, 0.002, 0.001
 ])
 
-normalized_curve = base_curve / base_curve.sum()
-interval_minutes = call_volume * normalized_curve
+if verteilung_file is not None:
+    try:
+        if verteilung_file.name.endswith(".csv"):
+            df_hist = pd.read_csv(verteilung_file)
+        else:
+            df_hist = pd.read_excel(verteilung_file)
+        
+        # Look for numeric distribution column
+        numeric_cols = df_hist.select_dtypes(include=[np.number]).columns
+        if len(numeric_cols) > 0:
+            raw_weights = df_hist[numeric_cols[0]].values[:len(intervals)]
+            if len(raw_weights) == len(intervals):
+                distribution_weights = raw_weights / raw_weights.sum()
+            else:
+                distribution_weights = default_curve / default_curve.sum()
+        else:
+            distribution_weights = default_curve / default_curve.sum()
+    except Exception:
+        distribution_weights = default_curve / default_curve.sum()
+else:
+    distribution_weights = default_curve / default_curve.sum()
+
+# Distribute Monthly Call Volume across intervals using historical weights
+interval_minutes = call_volume * distribution_weights
 interval_calls = interval_minutes / (aht / 60)
 
 # Erlang-C Net & Gross FTE Calculation per interval
@@ -71,7 +100,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "📋 Verfügbarkeitsliste & Priority Auto-Mapping",
     "📈 Forecast vs. Planned Capacity Chart",
     "🔄 Dynamic Shift Rotation (Mon-Sun)",
-    "🧮 Interval Distribution (Swisscom 07:00-22:00)"
+    "🧮 Interval Distribution & Volume Breakdown"
 ])
 
 # ---------------------------------------------------------
@@ -79,7 +108,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
 # ---------------------------------------------------------
 with tab1:
     st.header("📋 Verfügbarkeitsliste & Priority Constraint Auto-Mapping")
-    st.write("Below is the mapped roster with real agent names and priority constraint tags:")
+    st.write(f"Active Roster Mapping for **{selected_month}**:")
     
     if verfuegbarkeit_file is not None:
         try:
@@ -139,7 +168,7 @@ with tab1:
 # TAB 2: CHART & DYNAMIC RE-CALCULATION
 # ---------------------------------------------------------
 with tab2:
-    st.header("📈 Interval Workload vs. Planned Staffing Capacity")
+    st.header(f"📈 Interval Workload vs. Planned Staffing Capacity ({selected_month})")
     st.write("Dynamic re-calculation across all 30-minute operational intervals (07:00 to 22:00 CET):")
     
     df_chart = pd.DataFrame({
@@ -204,12 +233,12 @@ with tab3:
 # TAB 4: INTERVAL BREAKDOWN TABLE
 # ---------------------------------------------------------
 with tab4:
-    st.header("🧮 Interval Breakdown Table (07:00 - 22:00)")
+    st.header(f"🧮 Interval Volume & Staffing Breakdown ({selected_month})")
     
     df_intervals = pd.DataFrame({
         "Interval Window": intervals,
-        "Forecast Call Volume": np.round(interval_calls, 1),
-        "Forecast Workload (Mins)": np.round(interval_minutes, 1),
+        "Distributed Calls": np.round(interval_calls, 1),
+        "Workload Minutes": np.round(interval_minutes, 1),
         "Erlangs": np.round(erlangs, 2),
         "Net Required FTE": net_fte_req,
         "Gross Required FTE": gross_fte_req
