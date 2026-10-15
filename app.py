@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.graph_objects as go
 import math
 
 st.set_page_config(page_title="Ohara WFM - Swisscom Engine", layout="wide")
@@ -52,7 +51,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
 ])
 
 # ---------------------------------------------------------
-# TAB 1: CHART & DYNAMIC RE-CALCULATION
+# TAB 1: NATIVE CHART & DYNAMIC RE-CALCULATION
 # ---------------------------------------------------------
 with tab1:
     st.header("📈 Interval Workload vs. Planned Staffing Capacity")
@@ -77,20 +76,13 @@ with tab1:
     net_fte_req = [math.ceil(e / 0.85) if e > 0 else 0 for e in erlangs]
     gross_fte_req = [math.ceil(n / (1 - (total_shrinkage / 100))) if n > 0 else 0 for n in net_fte_req]
     
-    # Interactive Plotly Chart
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=intervals, y=gross_fte_req, mode='lines+markers', name='Gross Required FTE', line=dict(color='red', width=3)))
-    fig.add_trace(go.Bar(x=intervals, y=net_fte_req, name='Net On-Queue FTE Target', marker_color='royalblue', opacity=0.6))
+    # Native Streamlit Chart (No extra library needed)
+    df_chart = pd.DataFrame({
+        "Gross Required FTE": gross_fte_req[:-1],
+        "Net On-Queue FTE Target": net_fte_req[:-1]
+    }, index=intervals[:-1])
     
-    fig.update_layout(
-        title="Interval FTE Demand & Capacity Curve (07:00 - 22:00)",
-        xaxis_title="Operational Interval (30-min)",
-        yaxis_title="Staffing Level (FTE)",
-        hovermode="x unified",
-        template="plotly_white"
-    )
-    
-    st.plotly_chart(fig, use_container_width=True)
+    st.line_chart(df_chart)
 
 # ---------------------------------------------------------
 # TAB 2: MULTI-WEEK ROTATION (MON-SUN & 50/50 PT SPLIT)
