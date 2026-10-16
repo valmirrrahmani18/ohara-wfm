@@ -110,7 +110,9 @@ if verteilung_file is not None:
         
         time_col = next((col_map[c] for c in col_map if 'intervall' in c or 'time' in c or 'start' in c), None)
         day_col = next((col_map[c] for c in col_map if 'day' in c or 'woche' in c or 'tag' in c), None)
-        vq_col = next((col_map[c] for c in col_map if 'vq' in c or 'entered' in c or 'volume' in c or 'calls' in c), None)
+        
+        # Target 'Average Call Inbound' or related terms
+        vq_col = next((col_map[c] for c in col_map if 'average' in c or 'inbound' in c or 'call' in c or 'vq' in c or 'entered' in c), None)
         
         if time_col and day_col and vq_col:
             day_translation = {
@@ -155,6 +157,9 @@ if verteilung_file is not None:
                 else:
                     daily_curves[std_day] = base_curves_default[std_day] / base_curves_default[std_day].sum()
             file_parsed = True
+            st.sidebar.success("Successfully parsed distribution using 'Average Call Inbound'!")
+        else:
+            st.sidebar.warning("Could not locate 'Average Call Inbound', 'Intervall Time Start', or 'day of week' columns. Using default curves.")
     except Exception as e:
         st.sidebar.error(f"Error reading file: {e}")
 
@@ -256,7 +261,6 @@ with tab1:
             colleague_prefix = st.text_input("Enter Colleague File Prefix:", value="FC_NICE04A_Colleague")
             export_filename = f"{colleague_prefix}_Swissccom.csv"
 
-    # Prepare export DataFrame matching screenshot schema
     export_rows = []
     for dt in date_list:
         date_str = f"{dt.month}/{dt.day}/{dt.year}"
@@ -269,7 +273,6 @@ with tab1:
             int_mins = daily_mins * curve[idx]
             int_calls = int_mins / (aht / 60)
             
-            # Convert 24h interval to 12-hr AM/PM format (e.g. 7:00 AM, 12:30 PM)
             h, m = map(int, interval.split(":"))
             t_obj = datetime.time(h, m)
             t_12hr = t_obj.strftime("%I:%M %p").lstrip("0")
@@ -290,7 +293,7 @@ with tab1:
         data=csv_bytes,
         file_name=export_filename,
         mime="text/csv",
-        help="Download CSV file formatted for Swisscom WFM. Move downloaded file into your Desktop/FC Exports folder."
+        help="Download CSV file formatted for Swisscom WFM."
     )
 
 # ---------------------------------------------------------
@@ -363,7 +366,7 @@ with tab4:
                 "08:00 - 13:00" if week_idx % 2 != 0 else "OFF",
                 "OFF" if week_idx % 2 != 0 else "08:00 - 13:00",
                 "08:30 - 17:00" if week_idx % 2 == 0 else "OFF",
-                "OFF" if week_idx == 0 else "13:30 - 22:00"
+                "OFF" if week_idx % 2 == 0 else "13:30 - 22:00"
             ]
         else:
             rotation_schedule[day] = [
