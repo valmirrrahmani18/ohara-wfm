@@ -81,19 +81,20 @@ while curr <= end_date:
     curr += datetime.timedelta(days=1)
 
 # ---------------------------------------------------------
-# PARSING VQ ENTERED HISTORICAL DISTRIBUTION (07:00 - 22:00 CET)
+# ROBUST VQ ENTERED HISTORICAL DISTRIBUTION PARSER
 # ---------------------------------------------------------
 intervals = [f"{h:02d}:{m:02d}" for h in range(7, 22) for m in (0, 30)]
 days_list = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
+# Fallback curves matching real shape if file is not uploaded
 base_curves_default = {
-    "Monday": np.array([0.005, 0.01, 0.02, 0.04, 0.06, 0.08, 0.095, 0.10, 0.095, 0.085, 0.075, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.008, 0.005, 0.003, 0.002, 0.001, 0.001, 0.0005]),
-    "Tuesday": np.array([0.006, 0.012, 0.022, 0.042, 0.062, 0.082, 0.092, 0.098, 0.092, 0.082, 0.072, 0.068, 0.062, 0.058, 0.052, 0.048, 0.042, 0.038, 0.032, 0.028, 0.022, 0.016, 0.011, 0.009, 0.006, 0.004, 0.002, 0.001, 0.001, 0.0005]),
-    "Wednesday": np.array([0.007, 0.014, 0.024, 0.044, 0.064, 0.084, 0.09, 0.096, 0.09, 0.08, 0.07, 0.07, 0.064, 0.06, 0.054, 0.05, 0.044, 0.04, 0.034, 0.03, 0.024, 0.018, 0.012, 0.01, 0.007, 0.004, 0.002, 0.001, 0.001, 0.0005]),
-    "Thursday": np.array([0.005, 0.011, 0.021, 0.041, 0.061, 0.081, 0.096, 0.102, 0.096, 0.086, 0.076, 0.066, 0.061, 0.056, 0.051, 0.046, 0.041, 0.036, 0.031, 0.026, 0.021, 0.015, 0.01, 0.008, 0.005, 0.003, 0.002, 0.001, 0.001, 0.0005]),
-    "Friday": np.array([0.008, 0.016, 0.026, 0.046, 0.066, 0.086, 0.09, 0.092, 0.086, 0.076, 0.07, 0.066, 0.062, 0.058, 0.054, 0.05, 0.046, 0.042, 0.036, 0.03, 0.024, 0.018, 0.013, 0.01, 0.008, 0.005, 0.003, 0.002, 0.001, 0.0005]),
-    "Saturday": np.array([0.003, 0.008, 0.015, 0.03, 0.05, 0.07, 0.085, 0.09, 0.085, 0.075, 0.065, 0.055, 0.05, 0.045, 0.04, 0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.008, 0.005, 0.003, 0.002, 0.001, 0.001, 0.0005, 0.0005, 0.0001]),
-    "Sunday": np.array([0.002, 0.005, 0.01, 0.02, 0.04, 0.06, 0.075, 0.08, 0.075, 0.065, 0.055, 0.045, 0.04, 0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.008, 0.005, 0.003, 0.002, 0.001, 0.001, 0.0005, 0.0005, 0.0001, 0.0001, 0.0001])
+    "Monday": np.array([0.015, 0.03, 0.05, 0.07, 0.08, 0.085, 0.09, 0.085, 0.08, 0.075, 0.07, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.008, 0.006, 0.005, 0.004, 0.003, 0.002, 0.001]),
+    "Tuesday": np.array([0.015, 0.03, 0.05, 0.07, 0.08, 0.085, 0.09, 0.085, 0.08, 0.075, 0.07, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.008, 0.006, 0.005, 0.004, 0.003, 0.002, 0.001]),
+    "Wednesday": np.array([0.015, 0.03, 0.05, 0.07, 0.08, 0.085, 0.09, 0.085, 0.08, 0.075, 0.07, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.008, 0.006, 0.005, 0.004, 0.003, 0.002, 0.001]),
+    "Thursday": np.array([0.015, 0.03, 0.05, 0.07, 0.08, 0.085, 0.09, 0.085, 0.08, 0.075, 0.07, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.008, 0.006, 0.005, 0.004, 0.003, 0.002, 0.001]),
+    "Friday": np.array([0.015, 0.03, 0.05, 0.07, 0.08, 0.085, 0.09, 0.085, 0.08, 0.075, 0.07, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.008, 0.006, 0.005, 0.004, 0.003, 0.002, 0.001]),
+    "Saturday": np.array([0.01, 0.02, 0.04, 0.06, 0.07, 0.08, 0.085, 0.08, 0.075, 0.07, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.008, 0.006, 0.004, 0.003, 0.002, 0.001, 0.001, 0.0005]),
+    "Sunday": np.array([0.01, 0.02, 0.04, 0.06, 0.07, 0.08, 0.085, 0.08, 0.075, 0.07, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.008, 0.006, 0.004, 0.003, 0.002, 0.001, 0.001, 0.0005])
 }
 
 daily_curves = {}
@@ -107,6 +108,7 @@ if verteilung_file is not None:
         else:
             df_hist = pd.read_excel(verteilung_file)
         
+        # Clean column names
         col_map = {str(c).strip().lower(): c for c in df_hist.columns}
         
         time_col = next((col_map[c] for c in col_map if 'intervall' in c or 'time' in c or 'start' in c), None)
@@ -114,30 +116,32 @@ if verteilung_file is not None:
         vq_col = next((col_map[c] for c in col_map if 'vq' in c or 'entered' in c), None)
         
         if time_col and day_col and vq_col:
-            # Comprehensive English & German day name mappings
             day_translation = {
-                'monday': 'Monday', 'montag': 'Monday', 'mon': 'Monday', 'mo': 'Monday', '1': 'Monday',
-                'tuesday': 'Tuesday', 'dienstag': 'Tuesday', 'tue': 'Tuesday', 'di': 'Tuesday', '2': 'Tuesday',
-                'wednesday': 'Wednesday', 'mittwoch': 'Wednesday', 'wed': 'Wednesday', 'mi': 'Wednesday', '3': 'Wednesday',
-                'thursday': 'Thursday', 'donnerstag': 'Thursday', 'thu': 'Thursday', 'do': 'Thursday', '4': 'Thursday',
-                'friday': 'Friday', 'freitag': 'Friday', 'fri': 'Friday', 'fr': 'Friday', '5': 'Friday',
-                'saturday': 'Saturday', 'samstag': 'Saturday', 'sat': 'Saturday', 'sa': 'Saturday', '6': 'Saturday',
-                'sunday': 'Sunday', 'sonntag': 'Sunday', 'sun': 'Sunday', 'so': 'Sunday', '7': 'Sunday'
+                'monday': 'Monday', 'montag': 'Monday', 'mon': 'Monday', 'mo': 'Monday', '1': 'Monday', '1.0': 'Monday',
+                'tuesday': 'Tuesday', 'dienstag': 'Tuesday', 'tue': 'Tuesday', 'di': 'Tuesday', '2': 'Tuesday', '2.0': 'Tuesday',
+                'wednesday': 'Wednesday', 'mittwoch': 'Wednesday', 'wed': 'Wednesday', 'mi': 'Wednesday', '3': 'Wednesday', '3.0': 'Wednesday',
+                'thursday': 'Thursday', 'donnerstag': 'Thursday', 'thu': 'Thursday', 'do': 'Thursday', '4': 'Thursday', '4.0': 'Thursday',
+                'friday': 'Friday', 'freitag': 'Friday', 'fri': 'Friday', 'fr': 'Friday', '5': 'Friday', '5.0': 'Friday',
+                'saturday': 'Saturday', 'samstag': 'Saturday', 'sat': 'Saturday', 'sa': 'Saturday', '6': 'Saturday', '6.0': 'Saturday',
+                'sunday': 'Sunday', 'sonntag': 'Sunday', 'sun': 'Sunday', 'so': 'Sunday', '7': 'Sunday', '7.0': 'Sunday', '0': 'Sunday'
             }
             
             df_hist['standard_day'] = df_hist[day_col].astype(str).str.strip().str.lower().map(day_translation)
             
-            # Debug expander to verify file parsing
-            with st.sidebar.expander("🔍 File Parsing Inspector"):
-                st.write("Detected Unique Days in File:", df_hist[day_col].unique().tolist())
-                st.write("Mapped Standard Days:", df_hist['standard_day'].unique().tolist())
-
+            # Robust time bucket parser handling datetime.time objects and strings
             def time_to_bucket(t_val):
                 try:
-                    t_str = str(t_val).strip()
-                    parts = t_str.split(':')
-                    h = int(parts[0])
-                    m = int(parts[1]) if len(parts) > 1 else 0
+                    if pd.isna(t_val):
+                        return None
+                    if hasattr(t_val, 'hour') and hasattr(t_val, 'minute'):
+                        h = t_val.hour
+                        m = t_val.minute
+                    else:
+                        t_str = str(t_val).strip()
+                        parts = t_str.split(':')
+                        h = int(parts[0])
+                        m = int(parts[1]) if len(parts) > 1 else 0
+                    
                     total_mins = h * 60 + m
                     bucket_mins = (total_mins // 30) * 30
                     bh = bucket_mins // 60
@@ -167,11 +171,11 @@ if verteilung_file is not None:
                     daily_curves[std_day] = base_curves_default[std_day] / base_curves_default[std_day].sum()
                     daily_raw_totals[std_day] = 1.0
             file_parsed = True
-            st.sidebar.success("Successfully parsed VQ Entered distribution across all days!")
+            st.sidebar.success("✅ Successfully parsed VQ Entered distribution from file!")
         else:
-            st.sidebar.warning("Required columns ('Intervall Time Start', 'day of week', 'VQ entered') not found. Using default curves.")
+            st.sidebar.warning("⚠️ Could not match required columns ('Intervall Time Start', 'day of week', 'VQ entered'). Using default curves.")
     except Exception as e:
-        st.sidebar.error(f"Error reading file: {e}")
+        st.sidebar.error(f"❌ Error reading file: {e}")
 
 if not file_parsed:
     for day in days_list:
