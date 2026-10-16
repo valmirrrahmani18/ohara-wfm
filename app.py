@@ -86,13 +86,12 @@ while curr <= end_date:
 intervals = [f"{h:02d}:{m:02d}" for h in range(7, 22) for m in (0, 30)]
 days_list = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
-# Standard bell curves for fallback only if file is missing
 base_curves_default = {
     "Monday": np.array([0.005, 0.01, 0.02, 0.04, 0.06, 0.08, 0.095, 0.10, 0.095, 0.085, 0.075, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.008, 0.005, 0.003, 0.002, 0.001, 0.001, 0.0005]),
-    "Tuesday": np.array([0.005, 0.01, 0.02, 0.04, 0.06, 0.08, 0.095, 0.10, 0.095, 0.085, 0.075, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.008, 0.005, 0.003, 0.002, 0.001, 0.001, 0.0005]),
-    "Wednesday": np.array([0.005, 0.01, 0.02, 0.04, 0.06, 0.08, 0.095, 0.10, 0.095, 0.085, 0.075, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.008, 0.005, 0.003, 0.002, 0.001, 0.001, 0.0005]),
-    "Thursday": np.array([0.005, 0.01, 0.02, 0.04, 0.06, 0.08, 0.095, 0.10, 0.095, 0.085, 0.075, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.008, 0.005, 0.003, 0.002, 0.001, 0.001, 0.0005]),
-    "Friday": np.array([0.005, 0.01, 0.02, 0.04, 0.06, 0.08, 0.095, 0.10, 0.095, 0.085, 0.075, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.008, 0.005, 0.003, 0.002, 0.001, 0.001, 0.0005]),
+    "Tuesday": np.array([0.006, 0.012, 0.022, 0.042, 0.062, 0.082, 0.092, 0.098, 0.092, 0.082, 0.072, 0.068, 0.062, 0.058, 0.052, 0.048, 0.042, 0.038, 0.032, 0.028, 0.022, 0.016, 0.011, 0.009, 0.006, 0.004, 0.002, 0.001, 0.001, 0.0005]),
+    "Wednesday": np.array([0.007, 0.014, 0.024, 0.044, 0.064, 0.084, 0.09, 0.096, 0.09, 0.08, 0.07, 0.07, 0.064, 0.06, 0.054, 0.05, 0.044, 0.04, 0.034, 0.03, 0.024, 0.018, 0.012, 0.01, 0.007, 0.004, 0.002, 0.001, 0.001, 0.0005]),
+    "Thursday": np.array([0.005, 0.011, 0.021, 0.041, 0.061, 0.081, 0.096, 0.102, 0.096, 0.086, 0.076, 0.066, 0.061, 0.056, 0.051, 0.046, 0.041, 0.036, 0.031, 0.026, 0.021, 0.015, 0.01, 0.008, 0.005, 0.003, 0.002, 0.001, 0.001, 0.0005]),
+    "Friday": np.array([0.008, 0.016, 0.026, 0.046, 0.066, 0.086, 0.09, 0.092, 0.086, 0.076, 0.07, 0.066, 0.062, 0.058, 0.054, 0.05, 0.046, 0.042, 0.036, 0.03, 0.024, 0.018, 0.013, 0.01, 0.008, 0.005, 0.003, 0.002, 0.001, 0.0005]),
     "Saturday": np.array([0.003, 0.008, 0.015, 0.03, 0.05, 0.07, 0.085, 0.09, 0.085, 0.075, 0.065, 0.055, 0.05, 0.045, 0.04, 0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.008, 0.005, 0.003, 0.002, 0.001, 0.001, 0.0005, 0.0005, 0.0001]),
     "Sunday": np.array([0.002, 0.005, 0.01, 0.02, 0.04, 0.06, 0.075, 0.08, 0.075, 0.065, 0.055, 0.045, 0.04, 0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.008, 0.005, 0.003, 0.002, 0.001, 0.001, 0.0005, 0.0005, 0.0001, 0.0001, 0.0001])
 }
@@ -115,18 +114,24 @@ if verteilung_file is not None:
         vq_col = next((col_map[c] for c in col_map if 'vq' in c or 'entered' in c), None)
         
         if time_col and day_col and vq_col:
+            # Comprehensive English & German day name mappings
             day_translation = {
-                'monday': 'Monday', 'montag': 'Monday', 'mon': 'Monday', '1': 'Monday',
-                'tuesday': 'Tuesday', 'dienstag': 'Tuesday', 'tue': 'Tuesday', '2': 'Tuesday',
-                'wednesday': 'Wednesday', 'mittwoch': 'Wednesday', 'wed': 'Wednesday', '3': 'Wednesday',
-                'thursday': 'Thursday', 'donnerstag': 'Thursday', 'thu': 'Thursday', '4': 'Thursday',
-                'friday': 'Friday', 'freitag': 'Friday', 'fri': 'Friday', '5': 'Friday',
-                'saturday': 'Saturday', 'samstag': 'Saturday', 'sat': 'Saturday', '6': 'Saturday',
-                'sunday': 'Sunday', 'sonntag': 'Sunday', 'sun': 'Sunday', '7': 'Sunday'
+                'monday': 'Monday', 'montag': 'Monday', 'mon': 'Monday', 'mo': 'Monday', '1': 'Monday',
+                'tuesday': 'Tuesday', 'dienstag': 'Tuesday', 'tue': 'Tuesday', 'di': 'Tuesday', '2': 'Tuesday',
+                'wednesday': 'Wednesday', 'mittwoch': 'Wednesday', 'wed': 'Wednesday', 'mi': 'Wednesday', '3': 'Wednesday',
+                'thursday': 'Thursday', 'donnerstag': 'Thursday', 'thu': 'Thursday', 'do': 'Thursday', '4': 'Thursday',
+                'friday': 'Friday', 'freitag': 'Friday', 'fri': 'Friday', 'fr': 'Friday', '5': 'Friday',
+                'saturday': 'Saturday', 'samstag': 'Saturday', 'sat': 'Saturday', 'sa': 'Saturday', '6': 'Saturday',
+                'sunday': 'Sunday', 'sonntag': 'Sunday', 'sun': 'Sunday', 'so': 'Sunday', '7': 'Sunday'
             }
             
             df_hist['standard_day'] = df_hist[day_col].astype(str).str.strip().str.lower().map(day_translation)
             
+            # Debug expander to verify file parsing
+            with st.sidebar.expander("🔍 File Parsing Inspector"):
+                st.write("Detected Unique Days in File:", df_hist[day_col].unique().tolist())
+                st.write("Mapped Standard Days:", df_hist['standard_day'].unique().tolist())
+
             def time_to_bucket(t_val):
                 try:
                     t_str = str(t_val).strip()
@@ -162,7 +167,7 @@ if verteilung_file is not None:
                     daily_curves[std_day] = base_curves_default[std_day] / base_curves_default[std_day].sum()
                     daily_raw_totals[std_day] = 1.0
             file_parsed = True
-            st.sidebar.success("Successfully calculated precise VQ Entered distribution!")
+            st.sidebar.success("Successfully parsed VQ Entered distribution across all days!")
         else:
             st.sidebar.warning("Required columns ('Intervall Time Start', 'day of week', 'VQ entered') not found. Using default curves.")
     except Exception as e:
@@ -176,7 +181,6 @@ if not file_parsed:
 weekday_abbr_map = {0: "Mo", 1: "Tu", 2: "We", 3: "Th", 4: "Fr", 5: "Sa", 6: "Su"}
 weekday_full_map = {0: "Monday", 1: "Tuesday", 2: "Wednesday", 3: "Thursday", 4: "Friday", 5: "Saturday", 6: "Sunday"}
 
-# Calculate total relative period weight based directly on actual raw historical daily totals
 total_period_weight = sum([daily_raw_totals[weekday_full_map[dt.weekday()]] for dt in date_list])
 
 dict_mins = {interval: {} for interval in intervals}
@@ -193,7 +197,6 @@ for dt in date_list:
     curve = daily_curves[day_full]
     day_raw_total = daily_raw_totals[day_full]
     
-    # Strictly distribute monthly minutes using historical proportions
     daily_mins = call_volume * (day_raw_total / total_period_weight)
     
     for idx, interval in enumerate(intervals):
