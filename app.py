@@ -27,7 +27,6 @@ month_num = month_num_map[selected_month_name]
 year = 2026
 
 st.sidebar.header("⚙️ Account Parameters")
-call_volume = st.sidebar.number_input("Monthly Call Volume (Minutes)", value=340000, step=10000)
 aht = st.sidebar.number_input("Average Handle Time (Seconds)", value=600, step=10)
 target_sl = st.sidebar.slider("Target Service Level (%)", 50, 100, 80)
 target_time = st.sidebar.number_input("Target Answer Time (Seconds)", value=20)
@@ -42,19 +41,6 @@ rotation_weeks = st.sidebar.slider("Rotation Cycle Length (Weeks)", 2, 10, 10)
 st.sidebar.header("📁 Data Sources")
 verteilung_file = st.sidebar.file_uploader("Upload 'Copy of Swisscom - Call verteilung 2' (.xlsx/.csv)", type=["xlsx", "csv"], key="verteilung")
 verfuegbarkeit_file = st.sidebar.file_uploader("Upload Verfügbarkeitsliste (.xlsx/.csv)", type=["xlsx", "csv"], key="verfuegbarkeit")
-
-# Executive Metrics Calculation
-total_calls_forecast = call_volume / (aht / 60)
-raw_workload_hours = call_volume / 60
-gross_workload_hours = raw_workload_hours / (1 - (total_shrinkage / 100))
-required_fte = round(gross_workload_hours / 168, 2)
-
-st.subheader(f"📊 Executive Overview — {selected_month_name} {year}")
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Total Monthly Calls", f"{int(total_calls_forecast):,}")
-col2.metric("Required Capacity", f"{required_fte} FTE")
-col3.metric("Target SL", f"{target_sl}% in {target_time}s")
-col4.metric("Total Shrinkage", f"{round(total_shrinkage, 2)}%")
 
 st.markdown("---")
 
@@ -81,24 +67,23 @@ while curr <= end_date:
     curr += datetime.timedelta(days=1)
 
 # ---------------------------------------------------------
-# ROBUST VQ ENTERED HISTORICAL DISTRIBUTION PARSER
+# DIRECT ABSOLUTE VQ ENTERED PARSER (07:00 - 22:00 CET)
 # ---------------------------------------------------------
 intervals = [f"{h:02d}:{m:02d}" for h in range(7, 22) for m in (0, 30)]
 days_list = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
-# Fallback curves matching real shape if file is not uploaded
-base_curves_default = {
-    "Monday": np.array([0.015, 0.03, 0.05, 0.07, 0.08, 0.085, 0.09, 0.085, 0.08, 0.075, 0.07, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.008, 0.006, 0.005, 0.004, 0.003, 0.002, 0.001]),
-    "Tuesday": np.array([0.015, 0.03, 0.05, 0.07, 0.08, 0.085, 0.09, 0.085, 0.08, 0.075, 0.07, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.008, 0.006, 0.005, 0.004, 0.003, 0.002, 0.001]),
-    "Wednesday": np.array([0.015, 0.03, 0.05, 0.07, 0.08, 0.085, 0.09, 0.085, 0.08, 0.075, 0.07, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.008, 0.006, 0.005, 0.004, 0.003, 0.002, 0.001]),
-    "Thursday": np.array([0.015, 0.03, 0.05, 0.07, 0.08, 0.085, 0.09, 0.085, 0.08, 0.075, 0.07, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.008, 0.006, 0.005, 0.004, 0.003, 0.002, 0.001]),
-    "Friday": np.array([0.015, 0.03, 0.05, 0.07, 0.08, 0.085, 0.09, 0.085, 0.08, 0.075, 0.07, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.008, 0.006, 0.005, 0.004, 0.003, 0.002, 0.001]),
-    "Saturday": np.array([0.01, 0.02, 0.04, 0.06, 0.07, 0.08, 0.085, 0.08, 0.075, 0.07, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.008, 0.006, 0.004, 0.003, 0.002, 0.001, 0.001, 0.0005]),
-    "Sunday": np.array([0.01, 0.02, 0.04, 0.06, 0.07, 0.08, 0.085, 0.08, 0.075, 0.07, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.008, 0.006, 0.004, 0.003, 0.002, 0.001, 0.001, 0.0005])
+# Realistic default absolute curves if no file is uploaded
+default_day_profile = {
+    "Monday": {i: 40.0 for i in intervals},
+    "Tuesday": {i: 40.0 for i in intervals},
+    "Wednesday": {i: 40.0 for i in intervals},
+    "Thursday": {i: 40.0 for i in intervals},
+    "Friday": {i: 40.0 for i in intervals},
+    "Saturday": {i: 20.0 for i in intervals},
+    "Sunday": {i: 15.0 for i in intervals}
 }
 
-daily_curves = {}
-daily_raw_totals = {}
+daily_absolute_curves = {}
 file_parsed = False
 
 if verteilung_file is not None:
@@ -108,7 +93,6 @@ if verteilung_file is not None:
         else:
             df_hist = pd.read_excel(verteilung_file)
         
-        # Clean column names
         col_map = {str(c).strip().lower(): c for c in df_hist.columns}
         
         time_col = next((col_map[c] for c in col_map if 'intervall' in c or 'time' in c or 'start' in c), None)
@@ -128,7 +112,6 @@ if verteilung_file is not None:
             
             df_hist['standard_day'] = df_hist[day_col].astype(str).str.strip().str.lower().map(day_translation)
             
-            # Robust time bucket parser handling datetime.time objects and strings
             def time_to_bucket(t_val):
                 try:
                     if pd.isna(t_val):
@@ -158,35 +141,43 @@ if verteilung_file is not None:
                 sub_df = df_hist[df_hist['standard_day'] == std_day]
                 if not sub_df.empty:
                     grouped = sub_df.groupby('bucket_interval')['numeric_vq'].sum().to_dict()
-                    curve_vals = [grouped.get(interval, 0.0) for interval in intervals]
-                    arr = np.array(curve_vals)
-                    tot = arr.sum()
-                    if tot > 0:
-                        daily_curves[std_day] = arr / tot
-                        daily_raw_totals[std_day] = tot
-                    else:
-                        daily_curves[std_day] = base_curves_default[std_day] / base_curves_default[std_day].sum()
-                        daily_raw_totals[std_day] = 1.0
+                    daily_absolute_curves[std_day] = {interval: grouped.get(interval, 0.0) for interval in intervals}
                 else:
-                    daily_curves[std_day] = base_curves_default[std_day] / base_curves_default[std_day].sum()
-                    daily_raw_totals[std_day] = 1.0
+                    daily_absolute_curves[std_day] = default_day_profile[std_day]
             file_parsed = True
-            st.sidebar.success("✅ Successfully parsed VQ Entered distribution from file!")
+            st.sidebar.success("✅ Successfully loaded exact VQ Entered absolute values from file!")
         else:
-            st.sidebar.warning("⚠️ Could not match required columns ('Intervall Time Start', 'day of week', 'VQ entered'). Using default curves.")
+            st.sidebar.warning("⚠️ Could not match required columns in file. Using default profiles.")
     except Exception as e:
         st.sidebar.error(f"❌ Error reading file: {e}")
 
 if not file_parsed:
     for day in days_list:
-        daily_curves[day] = base_curves_default[day] / base_curves_default[day].sum()
-        daily_raw_totals[day] = 1.0
+        daily_absolute_curves[day] = default_day_profile[day]
 
 weekday_abbr_map = {0: "Mo", 1: "Tu", 2: "We", 3: "Th", 4: "Fr", 5: "Sa", 6: "Su"}
 weekday_full_map = {0: "Monday", 1: "Tuesday", 2: "Wednesday", 3: "Thursday", 4: "Friday", 5: "Saturday", 6: "Sunday"}
 
-total_period_weight = sum([daily_raw_totals[weekday_full_map[dt.weekday()]] for dt in date_list])
+# Calculate total month calls directly from the historical file sums for executive metrics
+total_monthly_calls_sum = 0
+for dt in date_list:
+    day_full = weekday_full_map[dt.weekday()]
+    total_monthly_calls_sum += sum(daily_absolute_curves[day_full].values())
 
+total_monthly_workload_mins = total_monthly_calls_sum * (aht / 60)
+gross_workload_hours = (total_monthly_workload_mins / 60) / (1 - (total_shrinkage / 100))
+required_fte = round(gross_workload_hours / 168, 2)
+
+st.subheader(f"📊 Executive Overview — {selected_month_name} {year} (Derived from File)")
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Total Monthly Calls", f"{int(total_monthly_calls_sum):,}")
+col2.metric("Required Capacity", f"{required_fte} FTE")
+col3.metric("Target SL", f"{target_sl}% in {target_time}s")
+col4.metric("Total Shrinkage", f"{round(total_shrinkage, 2)}%")
+
+st.markdown("---")
+
+# Build matrices directly using exact absolute values from file
 dict_mins = {interval: {} for interval in intervals}
 dict_calls = {interval: {} for interval in intervals}
 dict_net = {interval: {} for interval in intervals}
@@ -198,14 +189,11 @@ for dt in date_list:
     day_full = weekday_full_map[dt.weekday()]
     
     col_tuple = (date_str, day_abbr)
-    curve = daily_curves[day_full]
-    day_raw_total = daily_raw_totals[day_full]
+    day_profile = daily_absolute_curves[day_full]
     
-    daily_mins = call_volume * (day_raw_total / total_period_weight)
-    
-    for idx, interval in enumerate(intervals):
-        int_mins = daily_mins * curve[idx]
-        int_calls = int_mins / (aht / 60)
+    for interval in intervals:
+        int_calls = day_profile.get(interval, 0.0)
+        int_mins = int_calls * (aht / 60)
         erlang_val = (int_calls * aht) / 1800
         net_fte = math.ceil(erlang_val / 0.85) if erlang_val > 0 else 0
         gross_fte = math.ceil(net_fte / (1 - (total_shrinkage / 100))) if net_fte > 0 else 0
@@ -276,14 +264,10 @@ with tab1:
     for dt in date_list:
         date_str = f"{dt.month}/{dt.day}/{dt.year}"
         day_full = weekday_full_map[dt.weekday()]
-        curve = daily_curves[day_full]
-        day_raw_total = daily_raw_totals[day_full]
-        daily_mins = call_volume * (day_raw_total / total_period_weight)
+        day_profile = daily_absolute_curves[day_full]
         
-        for idx, interval in enumerate(intervals):
-            int_mins = daily_mins * curve[idx]
-            int_calls = int_mins / (aht / 60)
-            
+        for interval in intervals:
+            int_calls = day_profile.get(interval, 0.0)
             h, m = map(int, interval.split(":"))
             t_obj = datetime.time(h, m)
             t_12hr = t_obj.strftime("%I:%M %p").lstrip("0")
