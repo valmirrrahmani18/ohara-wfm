@@ -18,12 +18,12 @@ WEEKDAY_ABBR = {0: "Mo", 1: "Tu", 2: "We", 3: "Th", 4: "Fr", 5: "Sa", 6: "Su"}
 
 DAY_TRANSLATION = {
     'monday': 'Monday', 'montag': 'Monday', 'mon': 'Monday', 'mo': 'Monday', '1': 'Monday', '1.0': 'Monday',
-    'tuesday': 'Tuesday', 'dienstag': 'Tuesday', 'tue': 'Tuesday', 'di': 'Tuesday', '2': 'Tuesday', '2.0': 'Tuesday',
-    'wednesday': 'Wednesday', 'mittwoch': 'Wednesday', 'wed': 'Wednesday', 'mi': 'Wednesday', '3': 'Wednesday', '3.0': 'Wednesday',
-    'thursday': 'Thursday', 'donnerstag': 'Thursday', 'thu': 'Thursday', 'do': 'Thursday', '4': 'Thursday', '4.0': 'Thursday',
+    'tuesday': 'Tuesday', 'dienstag': 'Tuesday', 'tu': 'Tuesday', 'tue': 'Tuesday', 'di': 'Tuesday', '2': 'Tuesday', '2.0': 'Tuesday',
+    'wednesday': 'Wednesday', 'mittwoch': 'Wednesday', 'we': 'Wednesday', 'wed': 'Wednesday', 'mi': 'Wednesday', '3': 'Wednesday', '3.0': 'Wednesday',
+    'thursday': 'Thursday', 'donnerstag': 'Thursday', 'th': 'Thursday', 'thu': 'Thursday', 'do': 'Thursday', '4': 'Thursday', '4.0': 'Thursday',
     'friday': 'Friday', 'freitag': 'Friday', 'fri': 'Friday', 'fr': 'Friday', '5': 'Friday', '5.0': 'Friday',
     'saturday': 'Saturday', 'samstag': 'Saturday', 'sat': 'Saturday', 'sa': 'Saturday', '6': 'Saturday', '6.0': 'Saturday',
-    'sunday': 'Sunday', 'sonntag': 'Sunday', 'sun': 'Sunday', 'so': 'Sunday', '7': 'Sunday', '7.0': 'Sunday', '0': 'Sunday', '0.0': 'Sunday',
+    'sunday': 'Sunday', 'sonntag': 'Sunday', 'su': 'Sunday', 'sun': 'Sunday', 'so': 'Sunday', '7': 'Sunday', '7.0': 'Sunday', '0': 'Sunday', '0.0': 'Sunday',
 }
 
 DEFAULT_PROFILE = {
@@ -58,10 +58,13 @@ def time_to_bucket(t_val):
             m = re.search(r'(\d{1,2}):(\d{2})', str(t_val))
             if not m:
                 return None
-            total = int(m.group(1)) * 60 + int(m.group(2))
+            hour, minute = int(m.group(1)), int(m.group(2))
+            if hour > 23 or minute > 59:
+                return None
+            total = hour * 60 + minute
         bucket = (total // 30) * 30
         label = f"{bucket // 60:02d}:{bucket % 60:02d}"
-        return label if label in INTERVALS else None
+        return label if 0 <= total < 1440 and label in INTERVALS else None
     except Exception:
         return None
 
@@ -119,11 +122,20 @@ def build_weekday_curves(df_hist, aggregation="Mean", weeks_in_file=1, drop_zero
     df["_vq"] = pd.to_numeric(df[vq_col], errors="coerce")
     diag["rows_bad_time"] = int(df["_bucket"].isna().sum())
     diag["rows_bad_vq"] = int(df["_vq"].isna().sum())
-    df["_vq"] = df["_vq"].fillna(0)
+    if diag["rows_bad_vq"] or (df["_vq"] < 0).any():
+        raise ValueError("Call volumes must be numeric and non-negative. Check decimal/thousands separators and empty cells.")
+    if diag["rows_bad_time"]:
+        raise ValueError(f"{diag['rows_bad_time']} rows have invalid times or fall outside 07:00–22:00. Correct the file or account opening hours before forecasting.")
 
     if date_col is not None:
-        df["_date"] = pd.to_datetime(df[date_col], errors="coerce", dayfirst=True).dt.normalize()
+        df["_date"] = df[date_col].apply(
+            lambda v: pd.to_datetime(v, errors="coerce", dayfirst=False)
+            if re.match(r"^\d{4}-\d{2}-\d{2}", str(v))
+            else pd.to_datetime(v, errors="coerce", dayfirst=True)
+        ).dt.normalize()
         diag["rows_bad_day"] = int(df["_date"].isna().sum())
+        if diag["rows_bad_day"]:
+            raise ValueError("History contains invalid dates. Use unambiguous YYYY-MM-DD dates.")
         df = df.dropna(subset=["_bucket", "_date"])
         diag["rows_used"] = len(df)
 
@@ -145,11 +157,13 @@ def build_weekday_curves(df_hist, aggregation="Mean", weeks_in_file=1, drop_zero
                 agg = sub.median() if aggregation == "Median" else sub.mean()
                 curves[day] = {i: float(agg[i]) for i in INTERVALS}
             else:
-                curves[day] = {i: DEFAULT_PROFILE[day] for i in INTERVALS}
+                curves[day] = {i: 0.0 for i in INTERVALS}
         diag["dates_per_weekday"] = n_dates
     else:
         df["_day"] = df[day_col].apply(normalize_day)
         diag["rows_bad_day"] = int(df["_day"].isna().sum())
+        if diag["rows_bad_day"]:
+            raise ValueError("History contains unrecognised weekdays. Use Monday–Sunday or Montag–Sonntag.")
         df = df.dropna(subset=["_bucket", "_day"])
         diag["rows_used"] = len(df)
         weeks = max(float(weeks_in_file), 1.0)
@@ -161,7 +175,7 @@ def build_weekday_curves(df_hist, aggregation="Mean", weeks_in_file=1, drop_zero
                 curves[day] = {i: float(g.get(i, 0.0)) for i in INTERVALS}
                 n_dates[day] = int(weeks)
             else:
-                curves[day] = {i: DEFAULT_PROFILE[day] for i in INTERVALS}
+                curves[day] = {i: 0.0 for i in INTERVALS}
                 n_dates[day] = 0
         diag["dates_per_weekday"] = n_dates
 
@@ -187,7 +201,13 @@ def service_level(n, a, aht, target_sec):
 
 def agents_required(calls, aht, target_sl, target_sec, max_occ):
     """Minimum agents on queue to hit the SL target and stay below max occupancy."""
-    if calls <= 0:
+    if not (math.isfinite(calls) and math.isfinite(aht)) or calls < 0 or aht <= 0:
+        raise ValueError("Calls must be finite and non-negative; AHT must be positive.")
+    if not (0 < target_sl < 1 and target_sec >= 0 and 0 < max_occ <= 1):
+        raise ValueError("SL must be below 100%, answer time non-negative, occupancy in (0, 100%].")
+    if calls == 0:
+        return 0
+    if calls == 0:
         return 0
     a = calls * aht / INTERVAL_SECONDS
     n = max(1, int(math.floor(a)) + 1)
@@ -195,7 +215,7 @@ def agents_required(calls, aht, target_sl, target_sec, max_occ):
         if service_level(n, a, aht, target_sec) >= target_sl and (a / n) <= max_occ:
             return n
         n += 1
-    return n
+    raise ValueError("Staffing search limit reached. Check input units and volume.")
 
 
 # =========================================================
@@ -203,7 +223,7 @@ def agents_required(calls, aht, target_sl, target_sec, max_occ):
 # =========================================================
 st.set_page_config(page_title="Ohara WFM - Swisscom Engine", layout="wide")
 st.title("🧙‍♂️ Ohara - Swisscom Strategic WFM Engine")
-st.markdown("Dynamic Calendar Matrix, Multi-Metric Controls, Shift Rotation & NICE/WFM CSV Export")
+st.markdown("Historical Distribution & Staffing Requirements • Rotation Preview")
 
 # ---------------------------------------------------------
 # SIDEBAR
@@ -216,14 +236,21 @@ month_num = month_names.index(selected_month_name) + 1
 year = int(st.sidebar.number_input("Year", min_value=2024, max_value=2035, value=2026, step=1))
 
 st.sidebar.header("⚙️ Account Parameters")
-aht = st.sidebar.number_input("Average Handle Time (Seconds)", value=600, step=10)
-target_sl = st.sidebar.slider("Target Service Level (%)", 50, 100, 80)
-target_time = st.sidebar.number_input("Target Answer Time (Seconds)", value=20)
+aht = st.sidebar.number_input("Average Handle Time (Seconds)", min_value=1, value=600, step=10)
+target_sl = st.sidebar.slider("Target Service Level (%)", 50, 99, 80)
+target_time = st.sidebar.number_input("Target Answer Time (Seconds)", min_value=0, value=20)
 max_occ_pct = st.sidebar.slider("Max Occupancy (%)", 50, 100, 85)
-ioo = st.sidebar.number_input("In-Office Overhead (%)", value=14.33)
-ooo = st.sidebar.number_input("Out-of-Office Overhead (%)", value=16.0)
-total_shrinkage = ioo + ooo
-weekly_contract_hours = st.sidebar.number_input("Contract hours per FTE per week", value=40.0, step=0.5)
+ioo = st.sidebar.number_input("In-Office Overhead (%)", min_value=0.0, max_value=99.0, value=14.33)
+ooo = st.sidebar.number_input("Out-of-Office Overhead (%)", min_value=0.0, max_value=99.0, value=16.0)
+shrinkage_basis = st.sidebar.selectbox(
+    "Shrinkage basis", ["Same base: add IOO + OOO", "Sequential: IOO after OOO"],
+    help="Use addition only if both percentages refer to the same contracted-hours base. Sequential means IOO is a share of attendance hours.")
+total_shrinkage = (ioo + ooo if shrinkage_basis.startswith("Same")
+                   else 100 * (1 - (1 - ioo / 100) * (1 - ooo / 100)))
+if total_shrinkage >= 100:
+    st.error("Combined shrinkage must be below 100%.")
+    st.stop()
+weekly_contract_hours = st.sidebar.number_input("Contract hours per FTE per week", min_value=0.5, value=40.0, step=0.5)
 
 st.sidebar.header("📈 Forecast Settings")
 monthly_target = st.sidebar.number_input(
@@ -278,14 +305,24 @@ if verteilung_file is not None:
         st.sidebar.success("✅ History loaded and averaged per weekday.")
     except Exception as e:
         st.sidebar.error(f"❌ Error reading file: {e}")
+        st.stop()
 
+if file_parsed and diag["missing_weekdays"]:
+    st.warning("Missing history for: " + ", ".join(diag["missing_weekdays"]))
+    if not st.checkbox("I confirm these weekdays are closed and should receive zero calls"):
+        st.info("Add history for these weekdays, or confirm that they are closed.")
+        st.stop()
 if not file_parsed:
+    st.warning("DEMO DATA — upload history before using results for planning.")
     st.sidebar.info("No valid history loaded – using default demo profile.")
 
 # ---------------------------------------------------------
 # FORECAST: scale history to the monthly target (if given)
 # ---------------------------------------------------------
 history_month_calls = sum(sum(daily_curves[WEEKDAY_FULL[d.weekday()]].values()) for d in in_month_dates)
+if history_month_calls <= 0:
+    st.error("No positive historical volume is available for this month. Check the history and selected period.")
+    st.stop()
 scale = (monthly_target / history_month_calls) if (monthly_target > 0 and history_month_calls > 0) else 1.0
 
 forecast = {}  # date -> {interval: calls}
@@ -338,7 +375,7 @@ c1.metric("Total Monthly Calls", f"{int(round(total_monthly_calls)):,}")
 c2.metric("FTE (workload only)", f"{required_fte_workload:.2f}")
 c3.metric("FTE (Erlang C, SL-based)", f"{required_fte_erlang:.2f}",
           help="Interval-by-interval staffing that actually meets the service level target. "
-               "This is the number to plan with; the workload-only value is the theoretical minimum.")
+               "This is an interval staffing-hours estimate, not a feasible roster. Shift patterns, breaks, skills and leave can increase the roster requirement.")
 c4.metric("Target SL", f"{target_sl}% in {target_time}s")
 c5.metric("Total Shrinkage", f"{round(total_shrinkage, 2)}%")
 
@@ -358,7 +395,7 @@ with st.expander("🔎 Data check — what did the app read from your file?", ex
             st.warning("File has no date column → totals were divided by 'Weeks covered by file' in the sidebar. "
                        "Make sure that number is correct.")
         if diag["missing_weekdays"]:
-            st.warning(f"No history for: {', '.join(diag['missing_weekdays'])} → demo values used.")
+            st.warning(f"No history for: {', '.join(diag['missing_weekdays'])} → zero calls, only after explicit closed-day confirmation.")
         summary = pd.DataFrame({
             "Dates/weeks used": [diag["dates_per_weekday"][d] for d in DAYS],
             "Avg calls per day": [round(sum(daily_curves[d].values()), 1) for d in DAYS],
@@ -375,9 +412,9 @@ st.markdown("---")
 # ---------------------------------------------------------
 tab1, tab2, tab3, tab4 = st.tabs([
     "🧮 Monthly Distribution Matrix",
-    "📈 Forecast vs. Capacity Chart",
-    "📋 Verfügbarkeitsliste & Priority Auto-Mapping",
-    "🔄 Dynamic Shift Rotation (Mon-Sun)"
+    "📈 Staffing Requirements",
+    "📋 Agent File Preview",
+    "🔄 Rotation Example"
 ])
 
 with tab1:
@@ -405,7 +442,10 @@ with tab1:
         st.dataframe(df_matrix_gross, use_container_width=True)
 
     st.markdown("---")
-    st.subheader("📥 Export CSV for Swisscom (Account CT # 1427)")
+    st.subheader("📥 Forecast CSV Export")
+    st.caption("Forecast contacts and AHT only; this does not export agent schedules or days off. Confirm the format with your NICE import configuration.")
+    export_ct = int(st.number_input("Call Type ID", min_value=1, value=1427))
+    include_trailing = st.checkbox("Include days after month end to complete the last week", value=False)
     col_exp1, col_exp2 = st.columns(2)
     with col_exp1:
         exporter_role = st.selectbox("Who is exporting?", ["Vali", "Colleague"])
@@ -418,13 +458,13 @@ with tab1:
             export_filename = f"{colleague_prefix}_Swissccom.csv"
 
     export_rows = []
-    for dt in date_list:
+    for dt in (date_list if include_trailing else in_month_dates):
         date_str = f"{dt.month}/{dt.day}/{dt.year}"
         for interval in INTERVALS:
             h, m = map(int, interval.split(":"))
             t_12hr = datetime.time(h, m).strftime("%I:%M %p").lstrip("0")
             export_rows.append({
-                "CT #": 1427,
+                "CT #": export_ct,
                 "Date": date_str,
                 "Interval": t_12hr,
                 "Contacts Rec": round(forecast[dt][interval], 6),
@@ -453,9 +493,11 @@ with tab2:
         "Net On-Queue FTE Target": df_matrix_net[col_tuple_chart]
     }, index=INTERVALS)
     st.line_chart(df_chart_plot)
+    st.caption("Required staffing only. Scheduled staffing and actual available capacity are not yet loaded.")
 
 with tab3:
-    st.header("📋 Verfügbarkeitsliste & Priority Constraint Auto-Mapping")
+    st.header("📋 Agent File Preview")
+    st.info("This version previews the file only. Agent constraints are not yet applied to staffing or rotations.")
     if verfuegbarkeit_file is not None:
         try:
             df_agents = read_table(verfuegbarkeit_file)
@@ -467,7 +509,8 @@ with tab3:
         st.info("💡 Upload `Verfügbarkeitsliste.xlsx` in the sidebar to auto-populate exact agent names.")
 
 with tab4:
-    st.header(f"🔄 Multi-Week Rotation Matrix ({rotation_weeks}-Week Cycle)")
+    st.header(f"🔄 Rotation Example ({rotation_weeks}-Week Cycle)")
+    st.warning("Illustration only: not calculated from agent availability, skills, contracts or demand. Do not use as an approved schedule.")
     st.markdown("""
 **Color-Coded Shift Legend:**
 * 🔵 **Morning:** `07:00 - 15:30` | 🟢 **Day:** `08:30 - 17:00` | 🟠 **Evening:** `12:00 - 20:30` | 🟣 **Late Evening:** `13:30 - 22:00` | 🔷 **EoB Closing:** `14:00 - 22:00`
