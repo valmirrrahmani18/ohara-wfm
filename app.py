@@ -229,6 +229,21 @@ def build_weekday_curves(df_hist, aggregation="Mean", weeks_in_file=1, drop_zero
     return curves, diag
 
 
+def forecast_to_contacts(amount, unit, aht_seconds):
+    """Convert contact handling workload to contacts; no staffing shrinkage here."""
+    if not math.isfinite(amount) or amount < 0:
+        raise ValueError("Forecast must be finite and non-negative.")
+    if not math.isfinite(aht_seconds) or aht_seconds <= 0:
+        raise ValueError("AHT must be positive and expressed in seconds.")
+    if unit == "Contacts":
+        return float(amount)
+    if unit == "Workload Minutes":
+        return amount * 60 / aht_seconds
+    if unit == "Workload Hours":
+        return amount * 3600 / aht_seconds
+    raise ValueError(f"Unknown forecast unit: {unit}")
+
+
 def erlang_c(n, a):
     """Probability that a call has to wait (Erlang C). n = agents, a = traffic in Erlangs."""
     if n <= a:
@@ -301,11 +316,19 @@ if total_shrinkage >= 100:
 weekly_contract_hours = st.sidebar.number_input("Contract hours per FTE per week", min_value=0.5, value=40.0, step=0.5)
 
 st.sidebar.header("📈 Forecast Settings")
-monthly_target = st.sidebar.number_input(
-    "Forecast calls for the selected month (0 = use history)", min_value=0, value=0, step=1000,
-    help="If you enter a monthly forecast, it is spread over the days and intervals using the "
-         "historical weekday weights and interval shares. 0 = use the historical daily average as is."
-)
+forecast_unit = st.sidebar.selectbox(
+    "Monthly forecast unit", ["Contacts", "Workload Minutes", "Workload Hours"],
+    help="Minutes and hours mean contact handling workload, before occupancy and shrinkage.")
+monthly_forecast_input = st.sidebar.number_input(
+    f"Forecast for selected month — {forecast_unit} (0 = use history)",
+    min_value=0.0, value=0.0, step=100.0 if forecast_unit != "Workload Hours" else 10.0,
+    key=f"monthly_forecast_{forecast_unit}",
+    help="The selected month's total is distributed using historical weekday weights and interval shares.")
+monthly_target = forecast_to_contacts(monthly_forecast_input, forecast_unit, aht)
+if monthly_forecast_input > 0:
+    st.sidebar.caption(f"Equivalent: {monthly_target:,.2f} contacts | "
+                       f"{monthly_target * aht / 60:,.2f} workload minutes | "
+                       f"{monthly_target * aht / 3600:,.2f} workload hours")
 aggregation = st.sidebar.selectbox("History aggregation per weekday", ["Mean", "Median"],
                                    help="Median is more robust against outlier days (outages, campaigns).")
 drop_zero_days = st.sidebar.checkbox("Ignore dates with 0 calls in history", value=True)
@@ -426,6 +449,14 @@ c3.metric("FTE (Erlang C, SL-based)", f"{required_fte_erlang:.2f}",
                "This is an interval staffing-hours estimate, not a feasible roster. Shift patterns, breaks, skills and leave can increase the roster requirement.")
 c4.metric("Target SL", f"{target_sl}% in {target_time}s")
 c5.metric("Total Shrinkage", f"{round(total_shrinkage, 2)}%")
+st.caption(f"Monthly handling workload: {workload_hours * 60:,.2f} minutes / {workload_hours:,.2f} hours. "
+           "AHT includes handling time per contact; occupancy and shrinkage affect required staffing, not forecast volume.")
+if monthly_forecast_input > 0:
+    actual_in_unit = (total_monthly_calls if forecast_unit == "Contacts" else
+                      workload_hours * 60 if forecast_unit == "Workload Minutes" else workload_hours)
+    st.caption(f"Forecast reconciliation: entered {monthly_forecast_input:,.2f} {forecast_unit.lower()} | "
+               f"distributed {actual_in_unit:,.2f} | difference {actual_in_unit - monthly_forecast_input:,.6f}. "
+               "Only dates in the selected month are counted.")
 
 with st.expander("🔎 Data check — what did the app read from your file?", expanded=(diag is not None)):
     if diag is None:
@@ -453,7 +484,8 @@ with st.expander("🔎 Data check — what did the app read from your file?", ex
         }, index=DAYS)
         st.dataframe(summary, use_container_width=True)
     if monthly_target > 0:
-        st.info(f"Monthly forecast {monthly_target:,} vs. history-based {int(round(history_month_calls)):,} "
+        st.info(f"Monthly forecast {monthly_forecast_input:,.2f} {forecast_unit.lower()} "
+                f"= {monthly_target:,.2f} contacts vs. history-based {history_month_calls:,.2f} contacts "
                 f"→ scale factor {scale:.3f}")
 
 st.markdown("---")
@@ -475,12 +507,22 @@ with tab1:
 
     metric_choice = st.radio(
         "Select Display Metric:",
-        ["Workload Minutes (Min)", "Call Volume (Calls)", "Net Required FTE", "Gross Required FTE (with Shrinkage)"],
+        ["Workload Minutes (Min)", "Workload Hours (h)", "Call Volume (Calls)", "Net Required FTE", "Gross Required FTE (with Shrinkage)"],
         horizontal=True
     )
 
     if metric_choice == "Workload Minutes (Min)":
         show = df_matrix_mins.copy()
+        show.loc["Total"] = show.sum()
+        st.dataframe(show, use_container_width=True)
+    elif metric_choice == "Workload Hours (h)":
+        # Use unrounded forecasts rather than the rounded minutes display.
+        show = pd.DataFrame({
+            (f"{d.day:02d}", WEEKDAY_ABBR[d.weekday()]):
+                {i: forecast[d][i] * aht / 3600 for i in INTERVALS}
+            for d in date_list
+        })
+        show.columns = columns_multiindex
         show.loc["Total"] = show.sum()
         st.dataframe(show, use_container_width=True)
     elif metric_choice == "Call Volume (Calls)":
