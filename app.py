@@ -84,6 +84,40 @@ def read_table(uploaded_file):
     return pd.read_excel(uploaded_file)
 
 
+def read_history_table(uploaded_file):
+    """Find a detailed history table without importing pivot totals twice."""
+    if uploaded_file.name.lower().endswith(".csv"):
+        result = read_table(uploaded_file)
+        result.attrs["source_sheet"] = "CSV"
+        result.attrs["header_row"] = 1
+        return result
+    book = pd.ExcelFile(uploaded_file)
+    candidates = []
+    for sheet in book.sheet_names:
+        preview = pd.read_excel(book, sheet_name=sheet, header=None, nrows=25)
+        for row_idx, row in preview.iterrows():
+            labels = [str(v).strip().lower() for v in row if pd.notna(v)]
+            has_time = any(any(k in v for k in ["intervall", "interval", "zeit", "time", "start"]) for v in labels)
+            has_volume = any(any(k in v for k in ["entered", "offered", "contacts", "calls", "volume", "anrufe", "eingang"]) for v in labels)
+            has_day = any(v in ["day", "date", "datum", "weekday", "wochentag", "day of week"]
+                          or "date" in v or "datum" in v for v in labels)
+            if has_time and has_volume and has_day:
+                candidates.append((sheet, int(row_idx)))
+                break
+    if len(candidates) != 1:
+        raise ValueError(
+            "Expected one detailed history table with time, date/weekday and offered calls; "
+            f"found {len(candidates)}. Sheets: {', '.join(book.sheet_names)}. "
+            "For multiple history tables, upload the required table as a separate file.")
+    sheet, header = candidates[0]
+    result = pd.read_excel(book, sheet_name=sheet, header=header)
+    result.columns = [str(c).strip() for c in result.columns]
+    result = result.dropna(how="all")
+    result.attrs["source_sheet"] = sheet
+    result.attrs["header_row"] = header + 1
+    return result
+
+
 def build_weekday_curves(df_hist, aggregation="Mean", weeks_in_file=1, drop_zero_days=True):
     """
     Turn raw history into ONE typical day per weekday (calls per 30-min interval).
@@ -95,6 +129,15 @@ def build_weekday_curves(df_hist, aggregation="Mean", weeks_in_file=1, drop_zero
     """
     cols = {str(c).strip().lower(): c for c in df_hist.columns}
     date_col = find_column(cols, ['datum', 'date'])
+    # NICE exports may label the actual date "Day" and weekday text "Day Of Week".
+    if date_col is None and "day" in cols:
+        candidate = cols["day"]
+        values = df_hist[candidate].dropna()
+        if pd.api.types.is_datetime64_any_dtype(values) or (
+            len(values) and values.map(lambda v: isinstance(v, (datetime.date, datetime.datetime))
+                or bool(re.match(r"^(?:\d{4}-\d{2}-\d{2}|\d{1,2}[./]\d{1,2}[./]\d{4})", str(v).strip()))).all()
+        ):
+            date_col = candidate
     time_col = find_column(cols, ['intervall', 'interval', 'zeit', 'time', 'start'],
                            exclude=[date_col] if date_col is not None else [])
     if time_col is None and date_col is not None:
@@ -116,13 +159,15 @@ def build_weekday_curves(df_hist, aggregation="Mean", weeks_in_file=1, drop_zero
     diag = {
         "date_col": date_col, "time_col": time_col, "day_col": day_col, "vq_col": vq_col,
         "rows_total": len(df),
+        "source_sheet": df_hist.attrs.get("source_sheet", "Table"),
+        "header_row": df_hist.attrs.get("header_row", 1),
     }
 
     df["_bucket"] = df[time_col].apply(time_to_bucket)
     df["_vq"] = pd.to_numeric(df[vq_col], errors="coerce")
     diag["rows_bad_time"] = int(df["_bucket"].isna().sum())
     diag["rows_bad_vq"] = int(df["_vq"].isna().sum())
-    if diag["rows_bad_vq"] or (df["_vq"] < 0).any():
+    if diag["rows_bad_vq"] or (df["_vq"] < 0).any() or not np.isfinite(df["_vq"]).all():
         raise ValueError("Call volumes must be numeric and non-negative. Check decimal/thousands separators and empty cells.")
     if diag["rows_bad_time"]:
         raise ValueError(f"{diag['rows_bad_time']} rows have invalid times or fall outside 07:00–22:00. Correct the file or account opening hours before forecasting.")
@@ -179,6 +224,7 @@ def build_weekday_curves(df_hist, aggregation="Mean", weeks_in_file=1, drop_zero
                 n_dates[day] = 0
         diag["dates_per_weekday"] = n_dates
 
+    diag["source_calls"] = float(df["_vq"].sum())
     diag["missing_weekdays"] = [d for d in DAYS if diag["dates_per_weekday"].get(d, 0) == 0]
     return curves, diag
 
@@ -205,6 +251,8 @@ def agents_required(calls, aht, target_sl, target_sec, max_occ):
         raise ValueError("Calls must be finite and non-negative; AHT must be positive.")
     if not (0 < target_sl < 1 and target_sec >= 0 and 0 < max_occ <= 1):
         raise ValueError("SL must be below 100%, answer time non-negative, occupancy in (0, 100%].")
+    if calls == 0:
+        return 0
     if calls == 0:
         return 0
     if calls == 0:
@@ -299,7 +347,7 @@ file_parsed = False
 
 if verteilung_file is not None:
     try:
-        df_hist = read_table(verteilung_file)
+        df_hist = read_history_table(verteilung_file)
         daily_curves, diag = build_weekday_curves(df_hist, aggregation, weeks_in_file, drop_zero_days)
         file_parsed = True
         st.sidebar.success("✅ History loaded and averaged per weekday.")
@@ -383,6 +431,9 @@ with st.expander("🔎 Data check — what did the app read from your file?", ex
     if diag is None:
         st.write("No file loaded. Demo profile is used.")
     else:
+        st.write(f"**Source:** `{diag['source_sheet']}`, header row {diag['header_row']} | "
+                 f"**Offered calls read:** {diag['source_calls']:,.0f}")
+        st.caption("15-minute rows are summed into 30-minute buckets before averaging dates of the same weekday. Dates entirely absent from the file are not assumed to be zero-call days.")
         st.write(f"**Columns used** → time: `{diag['time_col']}` | "
                  f"date: `{diag['date_col']}` | weekday: `{diag['day_col']}` | VQ: `{diag['vq_col']}`")
         st.write(f"Rows in file: **{diag['rows_total']:,}** | rows used: **{diag['rows_used']:,}** | "
