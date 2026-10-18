@@ -244,6 +244,26 @@ def forecast_to_contacts(amount, unit, aht_seconds):
     raise ValueError(f"Unknown forecast unit: {unit}")
 
 
+def build_forecast_export(forecast, year, month, call_type, aht):
+    """Export all half-hour interval starts for exactly one calendar month."""
+    rows = []
+    for day in range(1, calendar.monthrange(year, month)[1] + 1):
+        dt = datetime.date(year, month, day)
+        if dt not in forecast:
+            raise ValueError(f"Missing forecast date: {dt}")
+        for halfhour in range(48):
+            hour, minute = divmod(halfhour * 30, 60)
+            bucket = f"{hour:02d}:{minute:02d}"
+            rows.append({
+                "CT #": call_type,
+                "Date": f"{month}/{day}/{year}",
+                "Interval": datetime.time(hour, minute).strftime("%I:%M %p").lstrip("0"),
+                "Contacts Rec": round(forecast[dt].get(bucket, 0.0), 6),
+                "AHT": int(aht),
+            })
+    return pd.DataFrame(rows)
+
+
 def erlang_c(n, a):
     """Probability that a call has to wait (Erlang C). n = agents, a = traffic in Erlangs."""
     if n <= a:
@@ -538,7 +558,7 @@ with tab1:
     st.subheader("📥 Forecast CSV Export")
     st.caption("Forecast contacts and AHT only; this does not export agent schedules or days off. Confirm the format with your NICE import configuration.")
     export_ct = int(st.number_input("Call Type ID", min_value=1, value=1427))
-    include_trailing = st.checkbox("Include days after month end to complete the last week", value=False)
+    st.caption("Exports the selected month only: 48 half-hour rows per day, from 12:00 AM to 11:30 PM. Intervals outside opening hours have zero contacts. The final interval ends at midnight.")
     col_exp1, col_exp2 = st.columns(2)
     with col_exp1:
         exporter_role = st.selectbox("Who is exporting?", ["Vali", "Colleague"])
@@ -550,21 +570,7 @@ with tab1:
             colleague_prefix = st.text_input("Enter Colleague File Prefix:", value="FC_NICE04A_Colleague")
             export_filename = f"{colleague_prefix}_Swissccom.csv"
 
-    export_rows = []
-    for dt in (date_list if include_trailing else in_month_dates):
-        date_str = f"{dt.month}/{dt.day}/{dt.year}"
-        for interval in INTERVALS:
-            h, m = map(int, interval.split(":"))
-            t_12hr = datetime.time(h, m).strftime("%I:%M %p").lstrip("0")
-            export_rows.append({
-                "CT #": export_ct,
-                "Date": date_str,
-                "Interval": t_12hr,
-                "Contacts Rec": round(forecast[dt][interval], 6),
-                "AHT": int(aht)
-            })
-
-    df_export = pd.DataFrame(export_rows)
+    df_export = build_forecast_export(forecast, year, month_num, export_ct, aht)
     csv_bytes = df_export.to_csv(index=False).encode('utf-8')
     st.download_button(
         label="📥 Download Swisscom CSV Export",
