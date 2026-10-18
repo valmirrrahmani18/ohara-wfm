@@ -244,11 +244,10 @@ def forecast_to_contacts(amount, unit, aht_seconds):
     raise ValueError(f"Unknown forecast unit: {unit}")
 
 
-def build_forecast_export(forecast, year, month, call_type, aht):
-    """Export all half-hour interval starts for exactly one calendar month."""
+def build_forecast_export(forecast, dates, call_type, aht):
+    """Export all half-hour interval starts for exactly the table dates."""
     rows = []
-    for day in range(1, calendar.monthrange(year, month)[1] + 1):
-        dt = datetime.date(year, month, day)
+    for dt in dates:
         if dt not in forecast:
             raise ValueError(f"Missing forecast date: {dt}")
         for halfhour in range(48):
@@ -256,7 +255,7 @@ def build_forecast_export(forecast, year, month, call_type, aht):
             bucket = f"{hour:02d}:{minute:02d}"
             rows.append({
                 "CT #": call_type,
-                "Date": f"{month}/{day}/{year}",
+                "Date": f"{dt.month}/{dt.day}/{dt.year}",
                 "Interval": datetime.time(hour, minute).strftime("%I:%M %p").lstrip("0"),
                 "Contacts Rec": round(forecast[dt].get(bucket, 0.0), 6),
                 "AHT": int(aht),
@@ -558,7 +557,7 @@ with tab1:
     st.subheader("📥 Forecast CSV Export")
     st.caption("Forecast contacts and AHT only; this does not export agent schedules or days off. Confirm the format with your NICE import configuration.")
     export_ct = int(st.number_input("Call Type ID", min_value=1, value=1427))
-    st.caption("Exports the selected month only: 48 half-hour rows per day, from 12:00 AM to 11:30 PM. Intervals outside opening hours have zero contacts. The final interval ends at midnight.")
+    st.caption(f"Exports every table date: {date_list[0]:%d.%m.%Y}–{date_list[-1]:%d.%m.%Y}, including the final full week. Each day has 48 half-hour rows. Intervals outside opening hours have zero contacts.")
     col_exp1, col_exp2 = st.columns(2)
     with col_exp1:
         exporter_role = st.selectbox("Who is exporting?", ["Vali", "Colleague"])
@@ -570,7 +569,7 @@ with tab1:
             colleague_prefix = st.text_input("Enter Colleague File Prefix:", value="FC_NICE04A_Colleague")
             export_filename = f"{colleague_prefix}_Swissccom.csv"
 
-    df_export = build_forecast_export(forecast, year, month_num, export_ct, aht)
+    df_export = build_forecast_export(forecast, date_list, export_ct, aht)
     csv_bytes = df_export.to_csv(index=False).encode('utf-8')
     st.download_button(
         label="📥 Download Swisscom CSV Export",
