@@ -257,7 +257,7 @@ def build_forecast_export(forecast, dates, call_type, aht):
                 "CT #": call_type,
                 "Date": f"{dt.month}/{dt.day}/{dt.year}",
                 "Interval": datetime.time(hour, minute).strftime("%I:%M %p").lstrip("0"),
-                "Contacts Rec": round(forecast[dt].get(bucket, 0.0), 6),
+                "Contacts Received": round(forecast[dt].get(bucket, 0.0), 6),
                 "AHT": int(aht),
             })
     return pd.DataFrame(rows)
